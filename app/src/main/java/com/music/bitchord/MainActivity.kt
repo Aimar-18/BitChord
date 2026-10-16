@@ -169,6 +169,7 @@ import com.music.bitchord.ui.screens.SourcesScreen
 import com.music.bitchord.data.sources.TrackMatcher
 import com.music.bitchord.ui.screens.SpotifyCanvasAuthScreen
 import com.music.bitchord.ui.screens.SpotifyLibraryScreen
+import com.music.bitchord.data.spotify.LocalPlaylistStore
 import com.music.bitchord.data.spotify.SPOTIFY_PAGE_PREFIX
 import com.music.bitchord.playback.AudioCache
 import com.music.bitchord.playback.LinkRequest
@@ -630,6 +631,8 @@ private fun BitChordApp(
     // The picker opened from the Library tab, where there is no track and
     // creating the playlist is the whole errand.
     var creatingPlaylist by remember { mutableStateOf(false) }
+    var localImportTargetPlaylistId by remember { mutableStateOf<String?>(null) }
+    var creatingLocalImportedPlaylist by remember { mutableStateOf(false) }
     var showSpotifyImportDialog by remember { mutableStateOf(false) }
     // Which album or playlist the collection menu is open on, or null when it
     // is shut. One slot for every surface that can open it — the shelves on
@@ -825,7 +828,7 @@ private fun BitChordApp(
     }
     // Playlists imported without (or instead of) a YouTube Music account live
     // in the app's own store, and sit on the same shelf as the downloaded ones.
-    val localPlaylists by com.music.bitchord.data.spotify.LocalPlaylistStore.playlists.collectAsStateWithLifecycle()
+    val localPlaylists by LocalPlaylistStore.playlists.collectAsStateWithLifecycle()
     val localPlaylistItems = localPlaylists.map { playlist ->
         ShelfItem(
             title = playlist.title,
@@ -852,7 +855,7 @@ private fun BitChordApp(
         // that play nothing.
         if (openPage.songs !is UiState.Loading &&
             (open == "local:downloads" || open == CACHE_FOLDER_BROWSE_ID || Downloads.recordIdOf(open) != null ||
-                com.music.bitchord.data.spotify.LocalPlaylistStore.getPlaylist(open) != null)
+                LocalPlaylistStore.getPlaylist(open) != null)
         ) {
             viewModel.reloadLocalDetail(open)
         }
@@ -1908,6 +1911,87 @@ private fun BitChordApp(
         Manifest.permission.READ_MEDIA_AUDIO
     } else {
         Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+    val importLocalSongsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { picked ->
+        val targetPlaylistId = localImportTargetPlaylistId
+        val createPlaylist = creatingLocalImportedPlaylist
+        localImportTargetPlaylistId = null
+        creatingLocalImportedPlaylist = false
+        if (picked.isEmpty()) {
+            showQueueNotice(context.getString(R.string.local_import_cancelled))
+            return@rememberLauncherForActivityResult
+        }
+        picked.forEach { uri ->
+            if (uri.scheme == "content") {
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                }
+            }
+        }
+        scope.launch {
+            val imported = LocalMediaRepository.songsFromUris(context, picked)
+            if (imported.songs.isEmpty()) {
+                showQueueNotice(context.getString(R.string.local_import_no_valid_audio))
+                return@launch
+            }
+            val messages = mutableListOf<String>()
+            if (targetPlaylistId != null) {
+                val result = LocalPlaylistStore.addSongs(targetPlaylistId, imported.songs)
+                if (result == null) {
+                    showQueueNotice(context.getString(R.string.failed))
+                    return@launch
+                }
+                if (result.added > 0) {
+                    messages += context.resources.getQuantityString(
+                        R.plurals.local_import_added_count,
+                        result.added,
+                        result.added,
+                        result.playlist.title,
+                    )
+                } else if (result.duplicates > 0) {
+                    messages += context.getString(R.string.song_already_in_playlist)
+                }
+                viewModel.reloadLocalDetail(targetPlaylistId)
+            } else if (createPlaylist) {
+                val created = LocalPlaylistStore.savePlaylist(
+                    context.getString(R.string.local_import_playlist_name),
+                    imported.songs,
+                )
+                val added = created.songs.size
+                messages += context.resources.getQuantityString(
+                    R.plurals.local_import_added_count,
+                    added,
+                    added,
+                    created.title,
+                )
+                viewModel.openDetail(
+                    browseId = created.browseId,
+                    title = created.title,
+                    subtitle = context.getString(R.string.local_playlist_subtitle, added),
+                    thumbnailUrl = created.songs.firstOrNull { !it.thumbnailUrl.isNullOrBlank() }?.thumbnailUrl,
+                )
+            }
+            if (imported.invalid > 0) {
+                messages += context.resources.getQuantityString(
+                    R.plurals.local_import_skipped_count,
+                    imported.invalid,
+                    imported.invalid,
+                )
+            }
+            if (messages.isNotEmpty()) {
+                showQueueNotice(messages.joinToString(" · "))
+            }
+        }
+    }
+    val requestLocalSongImport: (String?, Boolean) -> Unit = { playlistId, createPlaylist ->
+        localImportTargetPlaylistId = playlistId
+        creatingLocalImportedPlaylist = createPlaylist
+        importLocalSongsLauncher.launch(arrayOf("audio/*"))
     }
     // The Search tab's Library source reads the Local Music folder, so it asks
     // for the same permission opening that folder does.
@@ -3229,6 +3313,7 @@ private fun BitChordApp(
                             onShelfItemLongPress = onBrowseLongPress,
                             onNewPlaylist = { creatingPlaylist = true },
                             onImportSpotifyPlaylist = { showSpotifyImportDialog = true },
+                            onImportLocalPlaylist = { requestLocalSongImport(null, createPlaylist = true) },
                             onShowAll = { shelf -> libraryShowAll = shelf },
                             replay = {
                                 LibraryReplayEntry(

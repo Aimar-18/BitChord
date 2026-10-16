@@ -1111,6 +1111,19 @@
     <string name="clear_song_cache_warning">All cached songs will be deleted and the Cached songs folder will be emptied. They will stream again the next time you play them.</string>
     <string name="import_spotify">Import Spotify</string>
     <string name="import_spotify_subtitle">From a playlist link</string>
+    <string name="import_local_songs">Import local songs</string>
+    <string name="import_local_songs_subtitle">From this device</string>
+    <string name="local_import_playlist_name">Imported songs</string>
+    <string name="local_import_cancelled">Import cancelled</string>
+    <string name="local_import_no_valid_audio">No playable audio files were selected.</string>
+    <plurals name="local_import_added_count">
+        <item quantity="one">Imported %1$d song into “%2$s”</item>
+        <item quantity="other">Imported %1$d songs into “%2$s”</item>
+    </plurals>
+    <plurals name="local_import_skipped_count">
+        <item quantity="one">%1$d file was skipped</item>
+        <item quantity="other">%1$d files were skipped</item>
+    </plurals>
     <string name="spotify_import_title">Import Spotify playlist</string>
     <string name="spotify_import_description">Paste a public playlist link. Songs are matched on YouTube Music.</string>
     <string name="spotify_import_description_local">Paste a public playlist link. Songs are matched on YouTube Music and saved on this device.</string>

@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import com.music.bitchord.data.DebugLog as Log
 import androidx.core.content.ContextCompat
 import com.music.bitchord.data.model.Song
@@ -58,6 +59,58 @@ object LocalMediaRepository {
                 context,
                 Manifest.permission.READ_EXTERNAL_STORAGE,
             ) == PackageManager.PERMISSION_GRANTED
+        }
+
+        data class ImportLocalSongsResult(
+            val songs: List<Song>,
+            val invalid: Int,
+        )
+
+        suspend fun songsFromUris(context: Context, uris: List<Uri>): ImportLocalSongsResult = withContext(Dispatchers.IO) {
+            val songs = mutableListOf<Song>()
+            var invalid = 0
+            uris.distinctBy(Uri::toString).forEach { uri ->
+                val uriStr = uri.toString()
+                val scheme = uri.scheme?.lowercase(Locale.ROOT)
+                if (scheme != "content" && scheme != "file") {
+                    invalid += 1
+                    return@forEach
+                }
+                val displayName = runCatching {
+                    context.contentResolver.query(
+                        uri,
+                        arrayOf(OpenableColumns.DISPLAY_NAME),
+                        null,
+                        null,
+                        null,
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            if (index >= 0) cursor.getString(index) else null
+                        } else {
+                            null
+                        }
+                    }
+                }.getOrNull()
+                    ?: uri.lastPathSegment
+                    ?: "Audio"
+                val canRead = runCatching {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { true } ?: false
+                }.getOrElse { false }
+                if (!canRead) {
+                    invalid += 1
+                    return@forEach
+                }
+                songs += buildSongFromUri(
+                    context = context,
+                    uriStr = uriStr,
+                    fileName = displayName,
+                )
+            }
+            ImportLocalSongsResult(
+                songs = songs.distinctBy { it.localUri ?: it.videoId },
+                invalid = invalid,
+            )
         }
     }
 
