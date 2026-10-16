@@ -35,6 +35,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -85,6 +87,7 @@ fun LibraryScreen(
     onShelfItemLongPress: (ShelfItem) -> Unit,
     onNewPlaylist: () -> Unit,
     onImportSpotifyPlaylist: (() -> Unit)? = null,
+    onImportLocalPlaylist: (() -> Unit)? = null,
     /**
      * A shelf's "Show all" — every shelf's row here stops at five cards (see
      * [LibraryGridShelf]), so this is the only way to reach whatever didn't
@@ -164,6 +167,7 @@ fun LibraryScreen(
                         onItemLongPress = onShelfItemLongPress,
                         onNewPlaylist = onNewPlaylist,
                         onImportSpotifyPlaylist = onImportSpotifyPlaylist,
+                        onImportLocalPlaylist = onImportLocalPlaylist,
                         onShowAll = { onShowAll(emptyPlaylists) },
                     )
                 }
@@ -196,6 +200,7 @@ fun LibraryScreen(
                                 onItemLongPress = onShelfItemLongPress,
                                 onNewPlaylist = onNewPlaylist,
                                 onImportSpotifyPlaylist = onImportSpotifyPlaylist,
+                                onImportLocalPlaylist = onImportLocalPlaylist,
                                 onShowAll = { onShowAll(emptyPlaylists) },
                             )
                         }
@@ -210,6 +215,7 @@ fun LibraryScreen(
                                     onItemLongPress = onShelfItemLongPress,
                                     onNewPlaylist = onNewPlaylist,
                                     onImportSpotifyPlaylist = onImportSpotifyPlaylist,
+                                    onImportLocalPlaylist = onImportLocalPlaylist,
                                     onShowAll = { onShowAll(pinnedFirst) },
                                     pinnedPlaylists = pinnedPlaylists,
                                 )
@@ -309,6 +315,7 @@ private fun PlaylistShelf(
     onItemLongPress: (ShelfItem) -> Unit,
     onNewPlaylist: () -> Unit,
     onImportSpotifyPlaylist: (() -> Unit)? = null,
+    onImportLocalPlaylist: (() -> Unit)? = null,
     onShowAll: () -> Unit,
     pinnedPlaylists: List<String> = emptyList(),
 ) {
@@ -333,6 +340,14 @@ private fun PlaylistShelf(
                         subtitle = stringResource(Res.string.import_spotify_subtitle),
                         onClick = onImportSpotifyPlaylist,
                         logo = Res.drawable.spotify_logo,
+                    )
+                }
+                if (onImportLocalPlaylist != null) {
+                    NewShelfCard(
+                        icon = Icons.Rounded.Folder,
+                        label = stringResource(Res.string.import_local_songs),
+                        subtitle = stringResource(Res.string.import_local_songs_subtitle),
+                        onClick = onImportLocalPlaylist,
                     )
                 }
             }

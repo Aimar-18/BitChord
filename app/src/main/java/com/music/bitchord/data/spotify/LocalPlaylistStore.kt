@@ -54,6 +54,8 @@ object LocalPlaylistStore {
                         albumId = sObj.optString("albumId", null).takeIf { !it.isNullOrBlank() && it != "null" },
                         albumName = sObj.optString("albumName", null).takeIf { !it.isNullOrBlank() && it != "null" },
                         isVideo = sObj.optBoolean("isVideo", false),
+                        localUri = sObj.optString("localUri", null).takeIf { !it.isNullOrBlank() && it != "null" },
+                        localPath = sObj.optString("localPath", null).takeIf { !it.isNullOrBlank() && it != "null" },
                     )
                     songs.add(song)
                 }
@@ -65,11 +67,39 @@ object LocalPlaylistStore {
 
     fun savePlaylist(title: String, songs: List<Song>): LocalPlaylist {
         val id = "sp_local_" + System.currentTimeMillis()
-        val playlist = LocalPlaylist(id = id, title = title, songs = songs)
+        val playlist = LocalPlaylist(id = id, title = title, songs = songs.distinctBy { dedupeKey(it) })
         val updated = listOf(playlist) + _playlists.value.filterNot { it.id == id }
         _playlists.value = updated
         persist(updated)
         return playlist
+    }
+
+    data class AddSongsResult(
+        val playlist: LocalPlaylist,
+        val added: Int,
+        val duplicates: Int,
+    )
+
+    fun addSongs(playlistId: String, songs: List<Song>): AddSongsResult? {
+        if (songs.isEmpty()) return null
+        val cleanId = normalizeId(playlistId)
+        var result: AddSongsResult? = null
+        val updated = _playlists.value.map { playlist ->
+            if (normalizeId(playlist.id) != cleanId) return@map playlist
+            val (merged, added) = mergeSongs(playlist.songs, songs)
+            val changed = playlist.copy(songs = merged)
+            result = AddSongsResult(
+                playlist = changed,
+                added = added,
+                duplicates = songs.size - added,
+            )
+            changed
+        }
+        if (result != null) {
+            _playlists.value = updated
+            persist(updated)
+        }
+        return result
     }
 
     fun deletePlaylist(id: String) {
@@ -79,9 +109,9 @@ object LocalPlaylistStore {
     }
 
     fun renamePlaylist(id: String, newTitle: String) {
-        val cleanId = id.removePrefix("local:playlist:").removePrefix("VL")
+        val cleanId = normalizeId(id)
         val updated = _playlists.value.map {
-            if (it.id == cleanId || it.id == id || it.browseId == id) {
+            if (normalizeId(it.id) == cleanId || normalizeId(it.browseId) == cleanId) {
                 it.copy(title = newTitle)
             } else it
         }
@@ -90,8 +120,8 @@ object LocalPlaylistStore {
     }
 
     fun getPlaylist(id: String): LocalPlaylist? {
-        val cleanId = id.removePrefix("local:playlist:").removePrefix("VL")
-        return _playlists.value.firstOrNull { it.id == cleanId || it.id == id || it.browseId == id }
+        val cleanId = normalizeId(id)
+        return _playlists.value.firstOrNull { normalizeId(it.id) == cleanId || normalizeId(it.browseId) == cleanId }
     }
 
     private fun persist(list: List<LocalPlaylist>) {
@@ -114,6 +144,8 @@ object LocalPlaylistStore {
                     sObj.put("albumId", song.albumId)
                     sObj.put("albumName", song.albumName)
                     sObj.put("isVideo", song.isVideo)
+                    sObj.put("localUri", song.localUri)
+                    sObj.put("localPath", song.localPath)
                     songsArray.put(sObj)
                 }
                 pObj.put("songs", songsArray)
@@ -122,4 +154,21 @@ object LocalPlaylistStore {
             prefs.edit().putString(KEY_PLAYLISTS, jsonArray.toString()).apply()
         }
     }
+
+    internal fun mergeSongs(existing: List<Song>, incoming: List<Song>): Pair<List<Song>, Int> {
+        val known = existing.asSequence().map(::dedupeKey).toMutableSet()
+        val appended = mutableListOf<Song>()
+        incoming.forEach { song ->
+            val key = dedupeKey(song)
+            if (known.add(key)) appended += song
+        }
+        return (existing + appended) to appended.size
+    }
+
+    private fun dedupeKey(song: Song): String = when {
+        !song.localUri.isNullOrBlank() -> "local:${song.localUri}"
+        else -> "video:${song.videoId}"
+    }
+
+    private fun normalizeId(id: String): String = id.removePrefix("local:playlist:").removePrefix("VL")
 }
