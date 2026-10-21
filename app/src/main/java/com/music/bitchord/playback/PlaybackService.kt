@@ -528,6 +528,108 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    private val playlistCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<Song>>>()
+    private val PLAYLIST_CACHE_TTL_MS = 5 * 60 * 1000L
+    private val PLAYLIST_FIRST_PAGE_TIMEOUT_MS = 4_000L
+    private val PLAYLIST_PAGE_TIMEOUT_MS = 4_000L
+
+    /**
+     * A playlist read and whether the continuation chain ran to its end.
+     *
+     * A partial list is still shown — most of a playlist beats the first
+     * screenful — but only a complete read is cached, so a dropped page means
+     * the next visit retries instead of serving the truncated copy for the
+     * whole TTL.
+     */
+    private class SongLoad(val songs: List<Song>, val complete: Boolean)
+
+    /**
+     * Every song reachable from [initialPage], following YouTube Music's
+     * continuation tokens until the feed runs dry.
+     *
+     * [YtMusicRepository.browseSongs] deliberately returns only the first page.
+     * Android Auto needs the whole playlist in one result (see [onGetChildren]),
+     * so the pages behind it are read here. A token that repeats ends the walk:
+     * it means the server is pointing back at a page already read, and looping
+     * on it would never finish.
+     */
+    private suspend fun fetchAllSongsFromPage(initialPage: YtMusicRepository.SongPage?): SongLoad {
+        if (initialPage == null) return SongLoad(emptyList(), false)
+        val allSongs = mutableListOf<Song>()
+        allSongs.addAll(initialPage.songs)
+        var token = initialPage.continuation
+        val seenTokens = HashSet<String>()
+        while (token != null) {
+            if (!seenTokens.add(token)) return SongLoad(allSongs, false)
+            val currentToken = token // val copy so smart cast works inside the lambda
+            val nextPage = try {
+                withTimeoutOrNull(PLAYLIST_PAGE_TIMEOUT_MS) {
+                    YtMusicRepository.moreSongs(currentToken).getOrNull()
+                }
+            } catch (_: Exception) {
+                null
+            } ?: return SongLoad(allSongs, false)
+            if (nextPage.songs.isEmpty()) return SongLoad(allSongs, true)
+            allSongs.addAll(nextPage.songs)
+            token = nextPage.continuation
+        }
+        return SongLoad(allSongs, true)
+    }
+
+    private suspend fun fetchPlaylistSongs(playlistId: String): SongLoad {
+        val initialPage = try {
+            withTimeoutOrNull(PLAYLIST_FIRST_PAGE_TIMEOUT_MS) {
+                val cleanId = playlistId.removePrefix("VL")
+                YtMusicRepository.browseSongs("VL$cleanId").getOrNull()
+                    ?: YtMusicRepository.browseSongs(cleanId).getOrNull()
+            }
+        } catch (_: Exception) {
+            null
+        }
+        return fetchAllSongsFromPage(initialPage)
+    }
+
+    private suspend fun fetchBrowseSongs(browseId: String): SongLoad {
+        val initialPage = try {
+            withTimeoutOrNull(PLAYLIST_FIRST_PAGE_TIMEOUT_MS) {
+                YtMusicRepository.browseSongs(browseId).getOrNull()
+            }
+        } catch (_: Exception) {
+            null
+        }
+        return fetchAllSongsFromPage(initialPage)
+    }
+
+    private suspend fun cachedPlaylistSongs(playlistId: String): List<Song> =
+        cachedSongList("playlist:$playlistId") { fetchPlaylistSongs(playlistId) }
+
+    private suspend fun cachedBrowseSongs(browseId: String): List<Song> =
+        cachedSongList("browse:$browseId") { fetchBrowseSongs(browseId) }
+
+    private suspend fun cachedSongList(key: String, fetch: suspend () -> SongLoad): List<Song> {
+        val existing = playlistCache[key]
+        if (existing != null && existing.second.isNotEmpty()) {
+            if (isFresh(existing.first, PLAYLIST_CACHE_TTL_MS)) return existing.second
+            // Serve the list already on screen and revalidate behind it: a
+            // playlist open should never wait on several round trips once it
+            // has been read. The refreshed copy is what the next open shows.
+            scope.launch(Dispatchers.IO) {
+                val fresh = fetch()
+                if (fresh.complete && fresh.songs.isNotEmpty()) {
+                    playlistCache[key] = SystemClock.elapsedRealtime() to fresh.songs
+                    fresh.songs.forEach { songCache[it.videoId] = it }
+                }
+            }
+            return existing.second
+        }
+        val loaded = fetch()
+        if (loaded.complete && loaded.songs.isNotEmpty()) {
+            playlistCache[key] = SystemClock.elapsedRealtime() to loaded.songs
+            loaded.songs.forEach { songCache[it.videoId] = it }
+        }
+        return loaded.songs.ifEmpty { existing?.second.orEmpty() }
+    }
+
     private val audioManager by lazy { getSystemService(AudioManager::class.java) }
     private val bluetoothTracker by lazy { BluetoothAudioTracker(this) }
     private var currentAudioInputFormat: Format? = null
@@ -8143,27 +8245,12 @@ class PlaybackService : MediaLibraryService() {
                     when {
                         parentId.startsWith("playlist:") -> {
                             val playlistId = parentId.removePrefix("playlist:")
-                            val songs = try {
-                                withTimeoutOrNull(2500L) {
-                                    YtMusicRepository.browseSongs("VL$playlistId").getOrNull()?.songs
-                                        ?: YtMusicRepository.browseSongs(playlistId).getOrNull()?.songs
-                                } ?: emptyList()
-                            } catch (_: Exception) {
-                                emptyList()
-                            }
-                            songs.forEach { songCache[it.videoId] = it }
+                            val songs = cachedPlaylistSongs(playlistId)
                             songs.map { it.toMediaItem() }
                         }
                         parentId.startsWith("browse:") -> {
                             val browseId = parentId.removePrefix("browse:")
-                            val songs = try {
-                                withTimeoutOrNull(2500L) {
-                                    YtMusicRepository.browseSongs(browseId).getOrNull()?.songs
-                                } ?: emptyList()
-                            } catch (_: Exception) {
-                                emptyList()
-                            }
-                            songs.forEach { songCache[it.videoId] = it }
+                            val songs = cachedBrowseSongs(browseId)
                             songs.map { it.toMediaItem() }
                         }
                         else -> {
@@ -8183,7 +8270,19 @@ class PlaybackService : MediaLibraryService() {
                     CONTENT_STYLE_LIST_ITEM_HINT_VALUE,
                 ),
             ).build()
-            LibraryResult.ofItemList(ImmutableList.copyOf(paginate(items, page, pageSize)), returnParams)
+            // Android Auto asks for page 0 of a playlist and does not reliably
+            // follow the pages after it, so paginating here showed only the
+            // first fifty songs no matter how long the playlist was. Deep
+            // content is sent whole on the first page; any later page is empty
+            // because there is nothing left to add, which also keeps a host
+            // that does page from appending the same songs twice.
+            val isDeepContent = parentId.startsWith("playlist:") || parentId.startsWith("browse:")
+            val finalItems = if (isDeepContent) {
+                if (page <= 0) items else emptyList()
+            } else {
+                paginate(items, page, pageSize)
+            }
+            LibraryResult.ofItemList(ImmutableList.copyOf(finalItems), returnParams)
         }
 
         override fun onGetItem(
@@ -8257,7 +8356,20 @@ class PlaybackService : MediaLibraryService() {
                 )
             }
 
-            // 2. Fallback to local downloaded songs (offline-ready)
+            // 2. Restore recent user session from LastPlayed
+            val last = LastPlayed.load()
+            if (last != null && last.songs.isNotEmpty()) {
+                val items = last.songs.map { it.toMediaItem() }
+                val validIndex = last.index.coerceIn(0, items.size - 1)
+                val validPositionMs = last.positionMs.coerceAtLeast(0L)
+                return@future MediaSession.MediaItemsWithStartPosition(
+                    ImmutableList.copyOf(items),
+                    validIndex,
+                    validPositionMs,
+                )
+            }
+
+            // 3. Fallback to local downloaded songs (offline-ready)
             val downloaded = Downloads.getDownloadedSongs(this@PlaybackService)
             if (downloaded.isNotEmpty()) {
                 val items = downloaded.map { it.toMediaItem() }
@@ -8268,7 +8380,7 @@ class PlaybackService : MediaLibraryService() {
                 )
             }
 
-            // 3. Fallback to device local music
+            // 4. Fallback to device local music
             val localSongs = LocalMediaRepository.getLocalMusic(this@PlaybackService)
             if (localSongs.isNotEmpty()) {
                 val items = localSongs.map { it.toMediaItem() }
@@ -8390,27 +8502,12 @@ class PlaybackService : MediaLibraryService() {
                     }
                     id.startsWith("playlist:") -> {
                         val playlistId = id.removePrefix("playlist:")
-                        val songs = try {
-                            withTimeoutOrNull(3000L) {
-                                YtMusicRepository.browseSongs("VL$playlistId").getOrNull()?.songs
-                                    ?: YtMusicRepository.browseSongs(playlistId).getOrNull()?.songs
-                            } ?: emptyList()
-                        } catch (_: Exception) {
-                            emptyList()
-                        }
-                        songs.forEach { songCache[it.videoId] = it }
+                        val songs = cachedPlaylistSongs(playlistId)
                         resolved.addAll(songs.map { it.toMediaItem() })
                     }
                     id.startsWith("browse:") -> {
                         val browseId = id.removePrefix("browse:")
-                        val songs = try {
-                            withTimeoutOrNull(3000L) {
-                                YtMusicRepository.browseSongs(browseId).getOrNull()?.songs
-                            } ?: emptyList()
-                        } catch (_: Exception) {
-                            emptyList()
-                        }
-                        songs.forEach { songCache[it.videoId] = it }
+                        val songs = cachedBrowseSongs(browseId)
                         resolved.addAll(songs.map { it.toMediaItem() })
                     }
                     id == MEDIA_ROOT_ID || id == MEDIA_RECENTS_ID -> {
@@ -8434,18 +8531,15 @@ class PlaybackService : MediaLibraryService() {
                     }
                     id == MEDIA_PLAYLISTS_ID -> {
                         val songs = try {
-                            withTimeoutOrNull(2500L) {
-                                val playlists = YtMusicRepository.userPlaylists().getOrNull() ?: emptyList()
-                                val first = playlists.firstOrNull()
-                                if (first != null) {
-                                    YtMusicRepository.browseSongs("VL${first.playlistId}").getOrNull()?.songs
-                                        ?: YtMusicRepository.browseSongs(first.playlistId).getOrNull()?.songs
-                                } else null
-                            } ?: emptyList()
+                            val playlists = cachedPlaylistCards()
+                            val first = playlists.firstOrNull()
+                            if (first != null) {
+                                val pId = first.browseId?.removePrefix("VL") ?: first.videoId
+                                if (pId != null) cachedPlaylistSongs(pId) else emptyList()
+                            } else emptyList()
                         } catch (_: Exception) {
                             emptyList()
                         }
-                        songs.forEach { songCache[it.videoId] = it }
                         resolved.addAll(songs.map { it.toMediaItem() })
                     }
                     id == MEDIA_LOCAL_MUSIC_ID -> {
@@ -8506,11 +8600,10 @@ class PlaybackService : MediaLibraryService() {
 
     private fun <T> paginate(items: List<T>, page: Int, pageSize: Int): List<T> {
         if (page < 0 || pageSize <= 0 || items.isEmpty()) return emptyList()
-        val safePageSize = pageSize.coerceAtMost(MAX_AUTO_PAGE_SIZE)
-        val fromLong = page.toLong() * safePageSize.toLong()
+        val fromLong = page.toLong() * pageSize.toLong()
         if (fromLong >= items.size.toLong()) return emptyList()
         val from = fromLong.toInt()
-        val to = (fromLong + safePageSize).coerceAtMost(items.size.toLong()).toInt()
+        val to = (fromLong + pageSize.toLong()).coerceAtMost(items.size.toLong()).toInt()
         return items.subList(from, to)
     }
 
@@ -8720,7 +8813,6 @@ class PlaybackService : MediaLibraryService() {
         const val FOREIGN_CACHE_KEEP_AHEAD = 3
         const val MEDIA_DOWNLOADS_ID = "downloads"
         const val MEDIA_LOCAL_MUSIC_ID = "local_music"
-        const val MAX_AUTO_PAGE_SIZE = 50
         const val MAX_AUTO_SEARCH_QUERY_CHARS = 200
         const val MAX_AUTO_SEARCH_CACHE_ENTRIES = 20
 
