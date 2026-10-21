@@ -8788,9 +8788,10 @@ class PlaybackService : MediaLibraryService() {
 
     /**
      * A deep folder too long for one Android Auto level: a playable "Play all"
-     * row followed by consecutive parts. The parts are ordinary folders, so
-     * opening one costs nothing beyond the already-cached song list, and every
-     * song is reachable without relying on the host to paginate.
+     * row followed by as few parts as the host ceiling allows. The parts are
+     * ordinary folders, so opening one costs nothing beyond the already-cached
+     * song list, and every song is reachable without relying on the host to
+     * paginate.
      */
     private fun deepFolderItems(kind: String, id: String, songs: List<Song>): List<MediaItem> {
         val parts = autoSongParts(songs.size)

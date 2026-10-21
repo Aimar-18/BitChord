@@ -12,10 +12,10 @@ class AutoBrowsePagingTest {
     }
 
     @Test
-    fun `543 songs split into six ordered parts covering every song once`() {
+    fun `543 songs split into two ordered parts covering every song once`() {
         val parts = autoSongParts(543)
 
-        assertEquals(6, parts.size)
+        assertEquals(2, parts.size)
         assertEquals(0, parts.first().start)
         assertEquals(543, parts.last().endExclusive)
         assertEquals(543, parts.sumOf { it.count })
@@ -42,5 +42,13 @@ class AutoBrowsePagingTest {
         val parts = autoSongParts(543)
 
         assertEquals(43, parts.last().count)
+    }
+
+    @Test
+    fun `a list just over two host ceilings adds a small third part`() {
+        val parts = autoSongParts(AUTO_MAX_ITEMS_PER_FOLDER * 2 + 1)
+
+        assertEquals(3, parts.size)
+        assertEquals(1, parts.last().count)
     }
 }

@@ -6,12 +6,14 @@ package com.music.bitchord.playback
  * level under that ceiling, and split anything larger into browsable parts.
  *
  * 500 is the ceiling reported by other media apps and the reason a 543-song
- * playlist stops at 500 rows in the car. The part size is deliberately much
- * smaller: each part then has room for artwork and metadata without nearing
- * the Binder transaction limit either.
+ * playlist stops at 500 rows in the car. Parts use that same ceiling rather
+ * than a smaller chunk: a playlist that already fits in one node is returned
+ * whole, and one that does not is shown in as few parts as the host allows.
+ * The app already sends a 500-song playlist as one list, so a 500-song part
+ * is the same payload that path has always used.
  */
 internal const val AUTO_MAX_ITEMS_PER_FOLDER = 500
-internal const val AUTO_SONGS_PER_PART = 100
+internal const val AUTO_SONGS_PER_PART = AUTO_MAX_ITEMS_PER_FOLDER
 
 /** Half-open range `[start, endExclusive)` of a playlist's song list. */
 internal data class AutoSongPart(
