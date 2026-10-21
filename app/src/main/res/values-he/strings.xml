@@ -1376,4 +1376,7 @@
     <string name="song_info_unavailable">לא זמין</string>
     <string name="song_info_error">לא ניתן לטעון חלק מהמידע.</string>
     <string name="song_info_retry">ניסיון חוזר</string>
+    <string name="auto_play_all">נגן הכול</string>
+    <string name="auto_playlist_part">חלק %1$d</string>
+    <string name="auto_playlist_range">%1$d–%2$d</string>
 </resources>

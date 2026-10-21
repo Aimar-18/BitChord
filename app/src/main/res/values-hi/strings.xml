@@ -1371,4 +1371,7 @@
     <string name="song_info_unavailable">उपलब्ध नहीं</string>
     <string name="song_info_error">कुछ जानकारी लोड नहीं हो सकी।</string>
     <string name="song_info_retry">फिर से कोशिश करें</string>
+    <string name="auto_play_all">सभी चलाएँ</string>
+    <string name="auto_playlist_part">भाग %1$d</string>
+    <string name="auto_playlist_range">%1$d–%2$d</string>
 </resources>

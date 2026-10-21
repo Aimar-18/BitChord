@@ -1348,4 +1348,7 @@
     <string name="song_info_unavailable">暂无信息</string>
     <string name="song_info_error">部分信息无法加载。</string>
     <string name="song_info_retry">重试</string>
+    <string name="auto_play_all">全部播放</string>
+    <string name="auto_playlist_part">第 %1$d 部分</string>
+    <string name="auto_playlist_range">%1$d–%2$d</string>
 </resources>

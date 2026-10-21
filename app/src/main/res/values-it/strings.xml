@@ -1310,4 +1310,7 @@
     <string name="song_info_unavailable">Non disponibile</string>
     <string name="song_info_error">Impossibile caricare alcune informazioni.</string>
     <string name="song_info_retry">Riprova</string>
+    <string name="auto_play_all">Riproduci tutto</string>
+    <string name="auto_playlist_part">Parte %1$d</string>
+    <string name="auto_playlist_range">%1$d–%2$d</string>
 </resources>

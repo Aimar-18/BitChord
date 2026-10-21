@@ -1411,4 +1411,7 @@
     <string name="song_info_unavailable">Niedostępne</string>
     <string name="song_info_error">Nie udało się wczytać części informacji.</string>
     <string name="song_info_retry">Spróbuj ponownie</string>
+    <string name="auto_play_all">Odtwórz wszystko</string>
+    <string name="auto_playlist_part">Część %1$d</string>
+    <string name="auto_playlist_range">%1$d–%2$d</string>
 </resources>

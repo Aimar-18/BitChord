@@ -1348,4 +1348,7 @@
     <string name="song_info_unavailable">Tidak tersedia</string>
     <string name="song_info_error">Sebagian informasi tidak dapat dimuat.</string>
     <string name="song_info_retry">Coba lagi</string>
+    <string name="auto_play_all">Putar semua</string>
+    <string name="auto_playlist_part">Bagian %1$d</string>
+    <string name="auto_playlist_range">%1$d–%2$d</string>
 </resources>

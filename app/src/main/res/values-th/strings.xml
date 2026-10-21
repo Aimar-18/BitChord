@@ -1354,4 +1354,7 @@
     <string name="song_info_unavailable">ไม่มีข้อมูล</string>
     <string name="song_info_error">ไม่สามารถโหลดข้อมูลบางส่วนได้</string>
     <string name="song_info_retry">ลองอีกครั้ง</string>
+    <string name="auto_play_all">เล่นทั้งหมด</string>
+    <string name="auto_playlist_part">ส่วนที่ %1$d</string>
+    <string name="auto_playlist_range">%1$d–%2$d</string>
 </resources>

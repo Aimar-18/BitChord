@@ -1403,4 +1403,7 @@
     <string name="song_info_unavailable">Недоступно</string>
     <string name="song_info_error">Не удалось загрузить часть информации.</string>
     <string name="song_info_retry">Повторить</string>
+    <string name="auto_play_all">Воспроизвести все</string>
+    <string name="auto_playlist_part">Часть %1$d</string>
+    <string name="auto_playlist_range">%1$d–%2$d</string>
 </resources>

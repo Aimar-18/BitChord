@@ -1288,4 +1288,7 @@
     <string name="song_info_unavailable">Không có thông tin</string>
     <string name="song_info_error">Không thể tải một số thông tin.</string>
     <string name="song_info_retry">Thử lại</string>
+    <string name="auto_play_all">Phát tất cả</string>
+    <string name="auto_playlist_part">Phần %1$d</string>
+    <string name="auto_playlist_range">%1$d–%2$d</string>
 </resources>
