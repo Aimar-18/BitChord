@@ -41,7 +41,8 @@ A watch build only finds a phone build of the same flavor **and** signed with
 the same key. Published phone APKs are signed in CI with the key from
 `secrets.KEYSTORE_BASE64`, which is not the keystore in a local checkout, so
 the prod watch APK for those phones has to come from CI too. `android.yml`
-uploads it as `bitchord-wear-prod-release-signed`.
+uploads it as `bitchord-wear-prod-release-signed` when the key is configured,
+and as `bitchord-wear-prod-release-unsigned` on a checkout without the secret.
 
 ## Build and install
 

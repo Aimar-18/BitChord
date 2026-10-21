@@ -21,36 +21,58 @@ jobs:
         cache: gradle
 
     - name: Setup Secrets (Keystore & local.properties)
+      id: release_signing
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
       run: |
         echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
         echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
         echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
 
-        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > bitchord-release.jks
+        # A fork without the release key still has to be able to compile the
+        # release build. Only create keystore.properties when the key actually
+        # exists; an empty file would make AGP try to sign with it and fail.
+        if [ -z "$KEYSTORE_BASE64" ]; then
+          echo "No release keystore configured; the APKs will be unsigned."
+          echo "signed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ -z "$KEY_ALIAS" ]; then
+          echo "::error::KEYSTORE_BASE64 is set but KEY_ALIAS is empty."
+          exit 1
+        fi
+
+        echo "$KEYSTORE_BASE64" | base64 -d > bitchord-release.jks
         {
           echo "storeFile=bitchord-release.jks"
-          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}"
-          echo "keyAlias=${{ secrets.KEY_ALIAS }}"
-          echo "keyPassword=${{ secrets.KEY_PASSWORD }}"
+          echo "storePassword=$KEYSTORE_PASSWORD"
+          echo "keyAlias=$KEY_ALIAS"
+          echo "keyPassword=$KEY_PASSWORD"
         } > keystore.properties
+        echo "signed=true" >> "$GITHUB_OUTPUT"
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Build Signed Prod Release APK
+    - name: Build Prod Release APK
       run: ./gradlew assembleProdRelease
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bitchord-prod-release-signed
+        name: bitchord-prod-release-${{ steps.release_signing.outputs.signed == 'true' && 'signed' || 'unsigned' }}
         path: app/build/outputs/apk/prod/release/*.apk
 
-    # Built by the same assembleProdRelease, with the same key. The watch app
-    # only pairs with a phone app signed by the same key, so a prod watch APK
-    # for these phone builds can only come from here, never a local build.
+    # Built by the same assembleProdRelease, with the same key when one is
+    # configured. The watch app only pairs with a phone app signed by the same
+    # key, so a prod watch APK for these phone builds can only come from here,
+    # never a local build.
     - name: Upload Wear OS APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bitchord-wear-prod-release-signed
+        name: bitchord-wear-prod-release-${{ steps.release_signing.outputs.signed == 'true' && 'signed' || 'unsigned' }}
         path: wearos/build/outputs/apk/prod/release/*.apk
