@@ -46,6 +46,13 @@ object InnertubeParser {
     data class SearchPage(val rows: List<SearchResult>, val continuation: String?)
 
     /**
+     * What YouTube Music's search box offers for a half-typed query: the
+     * query completions from its first section and the playable entity rows
+     * from its second.
+     */
+    data class SearchSuggestions(val queries: List<String>, val rows: List<SearchResult>)
+
+    /**
      * Search results are heterogeneous: songs carry a videoId, while albums,
      * artists and playlists carry a browseId plus a page type. Both arrive as
      * `musicResponsiveListItemRenderer`, so each row is classified on the way out.
@@ -115,28 +122,35 @@ object InnertubeParser {
     }
 
     /**
-     * The typeahead queries out of a `music/get_search_suggestions` response.
+     * Everything the typeahead out of a `music/get_search_suggestions`
+     * response is made of.
      *
-     * Two sections come back. The first is what this reads: query strings, as
+     * Two sections come back. The first is query strings, as
      * `searchSuggestionRenderer`. The second — present signed in, and for
      * some terms signed out — is entity rows for songs and artists, as the
-     * same `musicResponsiveListItemRenderer` a search result uses. Those are
-     * deliberately ignored: what the field is being filled in with is a
-     * query, and a row that navigates straight to a track instead is a
-     * different feature with a different tap target.
+     * same `musicResponsiveListItemRenderer` a search result uses. The entity
+     * rows are what makes the web client surface "Te Dejo Madrid" after
+     * "te d"; reading only the query strings forced this app to run a separate
+     * full search, which ranks short prefixes far worse.
      *
      * `searchEndpoint.query` is preferred over the display text because the
      * display text arrives split into runs purely so the typed prefix can be
      * bold-faced, with no separator of its own to rejoin on.
      */
-    fun parseSearchSuggestions(response: JsonObject): List<String> =
-        collectRenderers(response, "searchSuggestionRenderer")
+    fun parseSearchSuggestions(response: JsonObject): SearchSuggestions {
+        val queries = collectRenderers(response, "searchSuggestionRenderer")
             .mapNotNull { renderer ->
                 val query = renderer.o("navigationEndpoint").o("searchEndpoint").s("query")
                     ?: renderer.o("suggestion").runs()
                 query.takeIf { it.isNotBlank() }
             }
             .distinct()
+        // The entity section uses the same renderers as a search page, so the
+        // existing classifier tells songs from artists and albums. The query
+        // completions have no such rows and contribute nothing here.
+        val rows = parseSearchPage(response, includeVideos = false).rows
+        return SearchSuggestions(queries, rows)
+    }
 
     /** Depth-first collection of a named renderer, preserving document order. */
     private fun collectRenderers(root: JsonElement, name: String): List<JsonObject> {

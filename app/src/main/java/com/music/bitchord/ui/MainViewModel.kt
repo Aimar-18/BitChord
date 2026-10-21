@@ -1430,7 +1430,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     init {
         startSearchPipeline()
         startSuggestPipeline()
-        startTypeaheadMediaPipeline()
         loadHome()
         loadExplore()
         if (_signedIn.value) {
@@ -2209,13 +2208,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * keystroke, so a lookup the user has typed past doesn't take a pooled
      * socket down with it.
      *
+     * One request now feeds both halves of the dropdown: YouTube's suggestions
+     * endpoint already returns the same entity rows the web client shows below
+     * the query completions. Reading those is what surfaces a song after a
+     * short prefix like "te d"; the old second full-search pass ranked short
+     * prefixes far worse and could land afterwards, replacing the better rows
+     * with worse ones.
+     *
      * This one *does* debounce, and that isn't the timer that was taken off the
-     * search. It's two orders of magnitude shorter, and it's paid for by the
-     * request behind it being a few hundred bytes rather than a full page of
-     * results — a burst of keystrokes shouldn't each cost a round trip, but the
-     * gap has to be short enough that the list is up before the next letter is
-     * typed. Nothing is waiting on it either way: the row the user typed is
-     * already on screen from the keystroke itself.
+     * search. It's two orders of magnitude shorter, and it's paid for by one
+     * suggestion request rather than a full page of results — a burst of
+     * keystrokes shouldn't each cost a round trip, but the gap has to be short
+     * enough that the list is up before the next letter is typed.
      *
      * A failure is left on the floor. There is no worthwhile way to report
      * "couldn't suggest anything" in a list of suggestions, and the typed text
@@ -2233,45 +2237,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .debounce(SUGGEST_DEBOUNCE_MS)
             .collectLatest { input ->
                 if (!stillWanted(input)) return@collectLatest
+                // The typed row is a usable "search exactly this" action while
+                // the request is in flight. Clear media rows from the previous
+                // prefix so they are not shown under text they don't match.
+                _suggestions.value = listOf(input)
+                _typeaheadResults.value = emptyList()
+
                 val fetched = YtMusicRepository.searchSuggestions(input).getOrNull()
-                    ?: return@collectLatest
                 // Asked again on the way back; the field is live throughout.
                 if (!stillWanted(input)) return@collectLatest
-                _suggestions.value = listOf(input) +
-                    fetched.filterNot { it.equals(input, ignoreCase = true) }
-            }
-    }
 
-    /**
-     * Parallel pipeline that fetches live media results (tracks, artists,
-     * albums) for the current query text. Runs alongside [startSuggestPipeline]
-     * with its own debounce so a fast typist doesn't saturate the network.
-     */
-    @OptIn(FlowPreview::class)
-    private fun startTypeaheadMediaPipeline() = viewModelScope.launch {
-        suggestRequests
-            .debounce(TYPEAHEAD_MEDIA_DEBOUNCE_MS)
-            .collectLatest { input ->
-                if (input.isBlank()) {
-                    _typeaheadResults.value = emptyList()
-                    return@collectLatest
+                if (fetched != null) {
+                    _suggestions.value = listOf(input) +
+                        fetched.queries.filterNot { it.equals(input, ignoreCase = true) }
+                    if (fetched.rows.isNotEmpty()) {
+                        _typeaheadResults.value = fetched.rows.take(TYPEAHEAD_MAX_RESULTS)
+                        return@collectLatest
+                    }
                 }
-                // Only show media results while the user is still typing — not
-                // reading committed search results. The query-text check on its
-                // own isn't enough: a late suggestion callback can repopulate
-                // _suggestions after submission, and we must not re-open the
-                // typeahead dropdown under an already-committed search.
-                if (searchSubmitted) {
-                    _typeaheadResults.value = emptyList()
-                    return@collectLatest
-                }
+
+                // Some terms have no entity section, especially for signed-out
+                // sessions. Fall back to the live search so the dropdown still
+                // has playable rows; it must not run when entity rows exist,
+                // because it ranks the short prefixes this pipeline is fixing.
                 val result = YtMusicRepository.searchTypeahead(input).getOrNull()
-                // If the field moved on, drop the result silently.
-                if (_query.value != input) {
-                    _typeaheadResults.value = emptyList()
-                    return@collectLatest
-                }
-                // Cap results so the dropdown doesn't grow unbounded.
+                if (!stillWanted(input)) return@collectLatest
                 _typeaheadResults.value = result?.rows.orEmpty().take(TYPEAHEAD_MAX_RESULTS)
             }
     }
@@ -2413,14 +2403,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
          * list is up by the time the thumb has left the key.
          */
         const val SUGGEST_DEBOUNCE_MS = 180L
-
-        /**
-         * Debounce for the parallel media-search pipeline. Slightly longer than
-         * text suggestions so it doesn't fire on every single keystroke — a
-         * full search is heavier than a suggestion request, and the UI only
-         * needs a few results to fill the dropdown.
-         */
-        const val TYPEAHEAD_MEDIA_DEBOUNCE_MS = 350L
 
         /**
          * Maximum number of live media results shown in the typeahead dropdown.

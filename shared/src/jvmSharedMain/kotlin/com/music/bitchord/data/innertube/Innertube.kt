@@ -632,12 +632,13 @@ object Innertube {
 
     /**
      * The typeahead list YouTube Music's own search box shows for a
-     * half-typed query — query strings, not results.
+     * half-typed query: query strings, plus the playable entity rows it puts
+     * below them when it has any.
      *
      * A different endpoint from [search] rather than a cheap mode of it, and
-     * far cheaper than one: the response is a few hundred bytes of text with
-     * no shelves, thumbnails or playback endpoints in it, which is what makes
-     * it affordable per keystroke where a search is not.
+     * still far cheaper than one: no result shelf or continuation, even though
+     * the entity rows carry their own artwork and playback endpoints. That is
+     * what makes it affordable per keystroke where a full search is not.
      */
     suspend fun searchSuggestions(input: String): JsonObject =
         postMusic("music/get_search_suggestions") {

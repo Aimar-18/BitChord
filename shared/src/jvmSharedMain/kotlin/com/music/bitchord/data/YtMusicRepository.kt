@@ -288,6 +288,12 @@ object YtMusicRepository {
         val continuation: String?,
     )
 
+    /** Query completions and playable entity rows from YouTube's suggestions endpoint. */
+    data class SearchSuggestions(
+        val queries: List<String>,
+        val rows: List<SearchResult>,
+    )
+
     /**
      * Fetches only the first search page. Publishing it immediately keeps the
      * search responsive; the UI asks [searchContinuation] for later pages as
@@ -328,12 +334,15 @@ object YtMusicRepository {
 
     /**
      * What YouTube Music would suggest completing [input] to, for the search
-     * field's typeahead. Unfiltered on purpose: a suggestion is a query, and
-     * which tab it is then run against is the user's to pick afterwards.
+     * field's typeahead: query completions plus the playable entity rows the
+     * web client shows below them. Unfiltered on purpose — which tab a picked
+     * query is run against is the user's to choose afterwards.
      */
-    suspend fun searchSuggestions(input: String): Result<List<String>> =
+    suspend fun searchSuggestions(input: String): Result<SearchSuggestions> =
         call("suggest") {
-            InnertubeParser.parseSearchSuggestions(Innertube.searchSuggestions(input))
+            InnertubeParser.parseSearchSuggestions(Innertube.searchSuggestions(input)).let { page ->
+                SearchSuggestions(page.queries, page.rows)
+            }
         }
 
     /**

@@ -187,8 +187,8 @@ fun SearchScreen(
     // up: the results are for whatever was searched before this edit began,
     // and so are the filter tabs above them.
     val suggesting = suggestions.isNotEmpty() && !searchingLibrary && !searchingAddons
-    // Live media results arrive from the parallel typeahead pipeline; show
-    // them only while the user is still typing (suggestions visible), so they
+    // Live media results ride along with the suggestion request; show them
+    // only while the user is still typing (suggestions visible), so they
     // appear as a dropdown beneath the text completions rather than floating
     // after the search has committed.
     val showTypeahead = typeaheadResults.isNotEmpty() && suggesting
