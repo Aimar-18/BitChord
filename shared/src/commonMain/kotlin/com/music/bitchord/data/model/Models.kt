@@ -382,6 +382,15 @@ sealed interface SearchResult {
     data class Browse(val item: BrowseItem) : SearchResult
 }
 
+/**
+ * Whether these rows contain something that can be played, as opposed to only
+ * artist/album/playlist cards. Typeahead uses this to decide whether a search
+ * answer is complete: a page of browse cards can be useful, but it is no
+ * substitute for the song the user is typing.
+ */
+fun List<SearchResult>.hasPlayableTrack(): Boolean =
+    any { it is SearchResult.Track || it is SearchResult.TopTrack }
+
 enum class SearchFilter(val label: String, val params: String?) {
     /** YouTube Music's mixed search page: songs, artists, albums and playlists. */
     ALL("All", null),

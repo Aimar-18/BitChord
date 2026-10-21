@@ -46,6 +46,7 @@ import com.music.bitchord.data.model.MoodGenreSection
 import com.music.bitchord.data.model.PlaylistPrivacy
 import com.music.bitchord.data.model.SearchFilter
 import com.music.bitchord.data.model.SearchResult
+import com.music.bitchord.data.model.hasPlayableTrack
 import com.music.bitchord.data.model.ShelfItem
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.model.SongMenu
@@ -2250,19 +2251,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (fetched != null) {
                     _suggestions.value = listOf(input) +
                         fetched.queries.filterNot { it.equals(input, ignoreCase = true) }
-                    if (fetched.rows.isNotEmpty()) {
+                    // Only take the suggestion rows as final when they contain
+                    // a track. Signed-in suggestions often answer with an
+                    // artist or album card and no song; treating that as enough
+                    // left the dropdown showing the artist the user already
+                    // knows instead of the track they typed.
+                    if (fetched.rows.hasPlayableTrack()) {
                         _typeaheadResults.value = fetched.rows.take(TYPEAHEAD_MAX_RESULTS)
                         return@collectLatest
                     }
                 }
 
-                // Some terms have no entity section, especially for signed-out
+                // No track in the entity section, especially for signed-out
                 // sessions. Fall back to the live search so the dropdown still
-                // has playable rows; it must not run when entity rows exist,
-                // because it ranks the short prefixes this pipeline is fixing.
+                // has playable rows, keeping the suggestion answer's browse
+                // cards behind the fallback's tracks.
                 val result = YtMusicRepository.searchTypeahead(input).getOrNull()
                 if (!stillWanted(input)) return@collectLatest
-                _typeaheadResults.value = result?.rows.orEmpty().take(TYPEAHEAD_MAX_RESULTS)
+                val fallbackRows = result?.rows.orEmpty()
+                val rows = if (fallbackRows.hasPlayableTrack()) {
+                    (fallbackRows + fetched?.rows.orEmpty()).distinctBy { searchResultKey(it) }
+                } else {
+                    (fetched?.rows.orEmpty() + fallbackRows).distinctBy { searchResultKey(it) }
+                }
+                _typeaheadResults.value = rows.take(TYPEAHEAD_MAX_RESULTS)
             }
     }
 
