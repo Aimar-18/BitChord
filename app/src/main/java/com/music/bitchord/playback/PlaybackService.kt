@@ -531,7 +531,8 @@ class PlaybackService : MediaLibraryService() {
     private val playlistCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<Song>>>()
     private val PLAYLIST_CACHE_TTL_MS = 5 * 60 * 1000L
     private val PLAYLIST_FIRST_PAGE_TIMEOUT_MS = 4_000L
-    private val PLAYLIST_PAGE_TIMEOUT_MS = 4_000L
+    private val PLAYLIST_PAGE_TIMEOUT_MS = 5_000L
+    private val PLAYLIST_PAGE_RETRY_TIMEOUT_MS = 8_000L
 
     /**
      * A playlist read and whether the continuation chain ran to its end.
@@ -561,19 +562,37 @@ class PlaybackService : MediaLibraryService() {
         val seenTokens = HashSet<String>()
         while (token != null) {
             if (!seenTokens.add(token)) return SongLoad(allSongs, false)
-            val currentToken = token // val copy so smart cast works inside the lambda
-            val nextPage = try {
-                withTimeoutOrNull(PLAYLIST_PAGE_TIMEOUT_MS) {
-                    YtMusicRepository.moreSongs(currentToken).getOrNull()
-                }
-            } catch (_: Exception) {
-                null
-            } ?: return SongLoad(allSongs, false)
+            val nextPage = fetchMoreSongs(token) ?: return SongLoad(allSongs, false)
             if (nextPage.songs.isEmpty()) return SongLoad(allSongs, true)
             allSongs.addAll(nextPage.songs)
             token = nextPage.continuation
         }
         return SongLoad(allSongs, true)
+    }
+
+    /**
+     * One continuation page, retried once.
+     *
+     * A page that is merely slow used to end the whole walk and leave a long
+     * playlist looking complete at the last hundred-song boundary. The retry
+     * is what turns that transient failure into the missing tail. Cancellation
+     * is rethrown so closing the screen still stops the read.
+     */
+    private suspend fun fetchMoreSongs(token: String): YtMusicRepository.SongPage? {
+        val timeouts = longArrayOf(PLAYLIST_PAGE_TIMEOUT_MS, PLAYLIST_PAGE_RETRY_TIMEOUT_MS)
+        for (timeout in timeouts) {
+            val page = try {
+                withTimeoutOrNull(timeout) {
+                    YtMusicRepository.moreSongs(token).getOrNull()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            if (page != null) return page
+        }
+        return null
     }
 
     private suspend fun fetchPlaylistSongs(playlistId: String): SongLoad {
@@ -626,6 +645,15 @@ class PlaybackService : MediaLibraryService() {
         if (loaded.complete && loaded.songs.isNotEmpty()) {
             playlistCache[key] = SystemClock.elapsedRealtime() to loaded.songs
             loaded.songs.forEach { songCache[it.videoId] = it }
+            Log.d("BitChord", "$key loaded ${loaded.songs.size} songs")
+        } else if (loaded.songs.isNotEmpty()) {
+            // Not cached: the next visit reads the chain again and may pick up
+            // the pages this pass missed. The warning is what identifies a
+            // truncated playlist in the car from a log without a debugger.
+            Log.w(
+                "BitChord",
+                "$key incomplete after ${loaded.songs.size} songs; retrying on the next open",
+            )
         }
         return loaded.songs.ifEmpty { existing?.second.orEmpty() }
     }
@@ -8242,16 +8270,41 @@ class PlaybackService : MediaLibraryService() {
                     )
                 }
                 else -> {
+                    val deepKind = deepKindOf(parentId)
+                    val partIndex = parentId.substringAfterLast(DEEP_PART_MARKER, "").toIntOrNull()
                     when {
+                        parentId.endsWith(DEEP_PLAY_SUFFIX) -> emptyList()
+                        deepKind != null && partIndex != null -> {
+                            val id = deepBaseId(parentId).removePrefix("$deepKind:")
+                            val songs = if (deepKind == "playlist") {
+                                cachedPlaylistSongs(id)
+                            } else {
+                                cachedBrowseSongs(id)
+                            }
+                            val part = autoSongParts(songs.size).getOrNull(partIndex)
+                            if (part == null) {
+                                emptyList()
+                            } else {
+                                songs.subList(part.start, part.endExclusive).map { it.toMediaItem() }
+                            }
+                        }
                         parentId.startsWith("playlist:") -> {
                             val playlistId = parentId.removePrefix("playlist:")
                             val songs = cachedPlaylistSongs(playlistId)
-                            songs.map { it.toMediaItem() }
+                            if (songs.size > AUTO_MAX_ITEMS_PER_FOLDER) {
+                                deepFolderItems("playlist", playlistId, songs)
+                            } else {
+                                songs.map { it.toMediaItem() }
+                            }
                         }
                         parentId.startsWith("browse:") -> {
                             val browseId = parentId.removePrefix("browse:")
                             val songs = cachedBrowseSongs(browseId)
-                            songs.map { it.toMediaItem() }
+                            if (songs.size > AUTO_MAX_ITEMS_PER_FOLDER) {
+                                deepFolderItems("browse", browseId, songs)
+                            } else {
+                                songs.map { it.toMediaItem() }
+                            }
                         }
                         else -> {
                             val cachedSong = songCache[parentId]
@@ -8315,6 +8368,18 @@ class PlaybackService : MediaLibraryService() {
                             mediaId,
                             getString(R.string.auto_unavailable_title),
                             getString(R.string.auto_unavailable_subtitle),
+                        )
+                    } else if (mediaId.endsWith(DEEP_PLAY_SUFFIX) && deepKindOf(mediaId) != null) {
+                        createPlayAllItem(
+                            mediaId = mediaId,
+                            title = getString(R.string.auto_play_all),
+                            subtitle = null,
+                        )
+                    } else if (mediaId.contains(DEEP_PART_MARKER) && deepKindOf(mediaId) != null) {
+                        val index = mediaId.substringAfterLast(DEEP_PART_MARKER).toIntOrNull() ?: 0
+                        createFolderItem(
+                            mediaId = mediaId,
+                            title = getString(R.string.auto_playlist_part, index + 1),
                         )
                     } else {
                         val cached = songCache[mediaId]
@@ -8500,6 +8565,32 @@ class PlaybackService : MediaLibraryService() {
                             resolved.addAll(songs.map { it.toMediaItem() })
                         }
                     }
+                    id.endsWith(DEEP_PLAY_SUFFIX) && deepKindOf(id) != null -> {
+                        val kind = deepKindOf(id)!!
+                        val base = deepBaseId(id).removePrefix("$kind:")
+                        val songs = if (kind == "playlist") {
+                            cachedPlaylistSongs(base)
+                        } else {
+                            cachedBrowseSongs(base)
+                        }
+                        resolved.addAll(songs.map { it.toMediaItem() })
+                    }
+                    id.contains(DEEP_PART_MARKER) && deepKindOf(id) != null -> {
+                        val kind = deepKindOf(id)!!
+                        val base = deepBaseId(id).removePrefix("$kind:")
+                        val index = id.substringAfterLast(DEEP_PART_MARKER).toIntOrNull() ?: -1
+                        val songs = if (kind == "playlist") {
+                            cachedPlaylistSongs(base)
+                        } else {
+                            cachedBrowseSongs(base)
+                        }
+                        val part = autoSongParts(songs.size).getOrNull(index)
+                        if (part != null) {
+                            resolved.addAll(
+                                songs.subList(part.start, part.endExclusive).map { it.toMediaItem() },
+                            )
+                        }
+                    }
                     id.startsWith("playlist:") -> {
                         val playlistId = id.removePrefix("playlist:")
                         val songs = cachedPlaylistSongs(playlistId)
@@ -8680,6 +8771,66 @@ class PlaybackService : MediaLibraryService() {
         folderType = if (item.browseId.startsWith("MPREb_")) MediaMetadata.FOLDER_TYPE_ALBUMS else MediaMetadata.FOLDER_TYPE_PLAYLISTS,
     )
 
+    private fun deepKindOf(mediaId: String): String? = when {
+        mediaId.startsWith("playlist:") -> "playlist"
+        mediaId.startsWith("browse:") -> "browse"
+        else -> null
+    }
+
+    /** `playlist:PL…:part:2` and `playlist:PL…:play` both reduce to `playlist:PL…`. */
+    private fun deepBaseId(mediaId: String): String =
+        mediaId.removeSuffix(DEEP_PLAY_SUFFIX).substringBefore(DEEP_PART_MARKER)
+
+    private fun deepPlayId(kind: String, id: String): String = "$kind:$id$DEEP_PLAY_SUFFIX"
+
+    private fun deepPartId(kind: String, id: String, index: Int): String =
+        "$kind:$id$DEEP_PART_MARKER$index"
+
+    /**
+     * A deep folder too long for one Android Auto level: a playable "Play all"
+     * row followed by consecutive parts. The parts are ordinary folders, so
+     * opening one costs nothing beyond the already-cached song list, and every
+     * song is reachable without relying on the host to paginate.
+     */
+    private fun deepFolderItems(kind: String, id: String, songs: List<Song>): List<MediaItem> {
+        val parts = autoSongParts(songs.size)
+        val items = ArrayList<MediaItem>(parts.size + 1)
+        items += createPlayAllItem(
+            mediaId = deepPlayId(kind, id),
+            title = getString(R.string.auto_play_all),
+            subtitle = resources.getQuantityString(R.plurals.song_count_plural, songs.size, songs.size),
+            artworkUrl = songs.firstOrNull()?.thumbnailUrl,
+        )
+        parts.forEach { part ->
+            items += createFolderItem(
+                mediaId = deepPartId(kind, id, part.index),
+                title = getString(R.string.auto_playlist_part, part.index + 1),
+                subtitle = getString(R.string.auto_playlist_range, part.start + 1, part.endExclusive),
+            )
+        }
+        return items
+    }
+
+    private fun createPlayAllItem(
+        mediaId: String,
+        title: String,
+        subtitle: String?,
+        artworkUrl: String? = null,
+    ): MediaItem = MediaItem.Builder()
+        .setMediaId(mediaId)
+        .setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(title)
+                .setSubtitle(subtitle)
+                .setArtworkUri(artworkUrl?.artworkAt(NOTIFICATION_ART_PX)?.let(Uri::parse))
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .setExtras(buildContentStyleBundle(CONTENT_STYLE_LIST_ITEM_HINT_VALUE, CONTENT_STYLE_LIST_ITEM_HINT_VALUE))
+                .build(),
+        )
+        .build()
+
     private fun createFolderItem(
         mediaId: String,
         title: String,
@@ -8815,6 +8966,10 @@ class PlaybackService : MediaLibraryService() {
         const val MEDIA_LOCAL_MUSIC_ID = "local_music"
         const val MAX_AUTO_SEARCH_QUERY_CHARS = 200
         const val MAX_AUTO_SEARCH_CACHE_ENTRIES = 20
+        /** Marks a child of a deep folder that opens one part of a >500-song list. */
+        const val DEEP_PART_MARKER = ":part:"
+        /** Marks the playable row that queues a whole deep folder. */
+        const val DEEP_PLAY_SUFFIX = ":play"
 
         val ROOT_CHILDREN: List<String> = listOf(
             MEDIA_QUICK_PICKS_ID,
