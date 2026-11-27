@@ -5356,6 +5356,20 @@ private fun BitChordApp(
         // overflow. What a track's long-press menu is to one song, this is to
         // the whole release — the queue rows above all.
         // One body for every frame alike — see songMenuBody.
+        fun enqueuePlaylist(target: BrowseTarget, shuffled: Boolean) {
+            val needsFullListing = !target.fromCard &&
+                detail?.browseId == target.browseId && detail?.continuation != null
+            val songTarget = if (needsFullListing) target.copy(songs = emptyList()) else target
+            withBrowseSongs(songTarget) { songs ->
+                val ordered = when {
+                    shuffled -> songs.shuffled()
+                    needsFullListing -> songs.sortedForDetail(songSort)
+                    else -> songs
+                }
+                addSongsToQueue(ordered)
+            }
+        }
+
         val browseMenuBody: @Composable (BrowseTarget) -> Unit = { target ->
             // Every row here closes the menu first: the tracks may still have to
             // be fetched, and leaving the sheet up over a request nothing on it
@@ -5424,7 +5438,20 @@ private fun BitChordApp(
                 },
                 startRenaming = browseRenameInSheet,
                 onPlayNext = act(playSongsNext),
-                onAddToQueue = act(addSongsToQueue),
+                onAddToQueue = if (target.type == BrowseType.PLAYLIST) {
+                    {
+                        browseActions = null
+                        enqueuePlaylist(target, shuffled = false)
+                    }
+                } else {
+                    act(addSongsToQueue)
+                },
+                onAddShuffledToQueue = if (target.type == BrowseType.PLAYLIST && (controller?.mediaItemCount ?: 0) > 0) {
+                    {
+                        browseActions = null
+                        enqueuePlaylist(target, shuffled = true)
+                    }
+                } else null,
                 onPlay = act { songs ->
                     QueueShuffle.disableForNextQueue()
                     play(songs, 0)

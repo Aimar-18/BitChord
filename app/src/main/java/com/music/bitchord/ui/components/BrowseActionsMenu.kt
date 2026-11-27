@@ -151,9 +151,11 @@ fun BrowseActionsMenu(
      */
     onRenameInSheet: (() -> Unit)? = null,
     startRenaming: Boolean = false,
+    onAddShuffledToQueue: (() -> Unit)? = null,
 ) {
     var renaming by remember { mutableStateOf(startRenaming) }
     var confirmingDelete by remember { mutableStateOf(false) }
+    var choosingQueueOrder by remember(target.browseId) { mutableStateOf(false) }
     var confirmingDeleteDownload by remember { mutableStateOf(false) }
 
     val playlist = target.playlist
@@ -201,8 +203,14 @@ fun BrowseActionsMenu(
             ActionRow(
                 SfIcons.PlayLast,
                 stringResource(R.string.add_to_queue),
-                onClick = onAddToQueue,
+                onClick = if (onAddShuffledToQueue == null) onAddToQueue else {
+                    { choosingQueueOrder = !choosingQueueOrder }
+                },
             )
+            if (choosingQueueOrder && onAddShuffledToQueue != null) {
+                ActionRow(SfIcons.PlayLast, stringResource(R.string.queue_playlist_in_order), onClick = onAddToQueue)
+                ActionRow(SfIcons.Shuffle, stringResource(R.string.queue_playlist_shuffled), onClick = onAddShuffledToQueue)
+            }
             onDownloadAll?.let { download ->
                 // Saying which of the three it is, rather than offering the same row
                 // whatever the state — this is where a release is asked for now that

@@ -472,6 +472,8 @@
     <string name="activity_watching">Watching</string>
     <string name="add_addon">Add an addon</string>
     <string name="add_addon_detail">Point BitChord at an addon server you host or were given a link to</string>
+    <string name="queue_playlist_in_order">In order</string>
+    <string name="queue_playlist_shuffled">In shuffle order</string>
     <string name="add_to_queue">Add to queue</string>
     <string name="after_this_song">After this song</string>
     <string name="always_on">Always on</string>
