@@ -143,6 +143,11 @@ android {
             applicationId = "com.dev.bitchord"
             resValue("string", "app_name", "BitChord Dev")
         }
+        create("beta") {
+            dimension = "env"
+            applicationId = "com.beta.bitchord"
+            resValue("string", "app_name", "BitChord Beta")
+        }
         create("prod") {
             dimension = "env"
             // Matches defaultConfig — this is the package already shipped/installed.
@@ -564,6 +569,7 @@ abstract class BundleWearApk : DefaultTask() {
 if (providers.gradleProperty("bitchord.bundleWear").orNull != "false" && findProject(":wearos") != null) {
     androidComponents.onVariants { variant ->
         val flavor = variant.productFlavors.firstOrNull { it.first == "env" }?.second ?: return@onVariants
+        if (flavor == "beta") return@onVariants
         val type = variant.buildType ?: return@onVariants
         // The benchmark build has no watch counterpart.
         if (type != "debug" && type != "release") return@onVariants
