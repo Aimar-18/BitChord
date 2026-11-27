@@ -17,8 +17,12 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.Url
+import io.ktor.http.content.OutgoingContent
 import io.ktor.http.contentType
+import io.ktor.http.withCharset
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.util.cio.readChannel
 import com.music.bitchord.data.model.LikeStatus
 import com.music.bitchord.data.model.PlaylistMove
 import com.music.bitchord.data.model.PlaylistPrivacy
@@ -41,7 +45,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import java.io.File
 import java.io.IOException
+import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.Locale
@@ -950,6 +956,63 @@ object Innertube {
     // the session cookie [postMusic] already signs with. None of it needs a
     // new credential or a different client — the same WEB_REMIX identity that
     // reads the library is the one allowed to edit it.
+
+    private val uploadClient by lazy { client.config { followRedirects = false } }
+
+    suspend fun uploadPrivateTrack(file: File, filename: String) {
+        requireSession()
+        ensureSessionScope()
+        val credentials = cookie ?: throw NotSignedInException()
+        val authUser = authUserFor(scope)
+        val pageId = pageIdFor(scope)
+        val authorization = sapisidFrom(credentials)?.let { sapisidHash(it) }
+            ?: throw NotSignedInException()
+        val size = file.length()
+        require(size in 1L until 314_572_800L)
+        val authHeaders: HttpRequestBuilder.() -> Unit = {
+            header("Cookie", credentials)
+            header("Authorization", authorization)
+            header("Origin", MUSIC_ORIGIN)
+            header("X-Origin", MUSIC_ORIGIN)
+            header("Referer", "$MUSIC_ORIGIN/")
+            header("X-Goog-AuthUser", authUser)
+            pageId?.let { header("X-Goog-PageId", it) }
+        }
+        val start = uploadClient.post("https://upload.youtube.com/upload/usermusic/http") {
+            parameter("authuser", authUser)
+            authHeaders()
+            header("X-Goog-Upload-Protocol", "resumable")
+            header("X-Goog-Upload-Command", "start")
+            header("X-Goog-Upload-Header-Content-Length", size)
+            contentType(ContentType.Application.FormUrlEncoded.withCharset(Charsets.UTF_8))
+            setBody("filename=" + URLEncoder.encode(filename, "UTF-8"))
+        }
+        val sessionUrl = Url(checkNotNull(start.headers["X-Goog-Upload-URL"]))
+        check(sessionUrl.protocol.name == "https" && sessionUrl.host == "upload.youtube.com")
+        check(cookie == credentials && authUserFor(scope) == authUser && pageIdFor(scope) == pageId)
+        val response = uploadClient.post(sessionUrl.toString()) {
+            authHeaders()
+            header("X-Goog-Upload-Command", "upload, finalize")
+            header("X-Goog-Upload-Offset", "0")
+            timeout {
+                requestTimeoutMillis = 600_000
+                socketTimeoutMillis = 120_000
+            }
+            setBody(object : OutgoingContent.ReadChannelContent() {
+                override val contentType = ContentType.Application.OctetStream
+                override val contentLength = size
+                override fun readFrom() = file.readChannel()
+            })
+        }
+        check(response.status.value == 200)
+        check(cookie == credentials && authUserFor(scope) == authUser && pageIdFor(scope) == pageId)
+    }
+
+    suspend fun recentPrivateUploads(): List<com.music.bitchord.data.model.Song> {
+        requireSession()
+        val page = browse("FEmusic_library_privately_owned_tracks", params = "ggMGKgQIABAB")
+        return InnertubeParser.collectSongsDeep(page).filter { UploadedTracks.contains(it.videoId) }
+    }
 
     /** A write attempted without a session; the caller has a sign-in prompt to show. */
     class NotSignedInException : IllegalStateException("Sign in to YouTube Music to do that")

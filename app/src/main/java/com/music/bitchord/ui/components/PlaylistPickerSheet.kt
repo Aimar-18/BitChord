@@ -65,12 +65,14 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.music.bitchord.R
+import com.music.bitchord.data.innertube.Innertube
 import com.music.bitchord.data.model.PlaylistPrivacy
 import com.music.bitchord.data.model.ROW_ART_PX
 import com.music.bitchord.data.model.Song
@@ -78,8 +80,16 @@ import com.music.bitchord.data.model.UserPlaylist
 import com.music.bitchord.data.model.artworkAt
 import com.music.bitchord.ui.components.thumbnailBorder
 import com.music.bitchord.ui.icons.BitChordIcons
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Where a track goes: one of the account's playlists, or a new one.
@@ -118,6 +128,7 @@ fun PlaylistPickerSheet(
     offline: Boolean = false,
     headerTitle: String? = null,
     songs: List<Song> = emptyList(),
+    onPickUploadedSong: ((Song) -> Unit)? = null,
 ) {
     var creating by remember { mutableStateOf(startCreating) }
     // By id rather than by value: the list is re-fetched under an open sheet,
@@ -159,7 +170,11 @@ fun PlaylistPickerSheet(
         properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
     ) {
         BackHandler {
-            if (creating && !startCreating) creating = false else closeAfter {}
+            when {
+                onPickUploadedSong != null -> closeAfter {}
+                creating && !startCreating -> creating = false
+                else -> closeAfter {}
+            }
         }
 
         Column(
@@ -167,7 +182,9 @@ fun PlaylistPickerSheet(
                 .fillMaxSize()
                 .statusBarsPadding(),
         ) {
-            if (creating) {
+            if (song != null && onPickUploadedSong != null) {
+                UploadLocalSongPanel(song, onBack = { closeAfter {} }, onPick = onPickUploadedSong)
+            } else if (creating) {
                 NewPlaylistForm(
                     // Nowhere to go back to when the sheet opened straight onto
                     // the form, so that bar closes it instead.
@@ -266,6 +283,134 @@ fun PlaylistPickerSheet(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun UploadLocalSongPanel(localSong: Song, onBack: () -> Unit, onPick: (Song) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val accountCookie = remember { Innertube.cookie }
+    var knownIds by remember { mutableStateOf<Set<String>?>(null) }
+    var found by remember { mutableStateOf<List<Song>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    var uploaded by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+
+    fun refresh(includeExisting: Boolean = false) {
+        if (busy) return
+        busy = true
+        failed = false
+        scope.launch {
+            try {
+                check(accountCookie != null && accountCookie == Innertube.cookie)
+                if (!uploaded) {
+                    knownIds = Innertube.recentPrivateUploads().mapTo(HashSet()) { it.videoId }
+                    uploadLocalAudio(context, localSong)
+                    uploaded = true
+                }
+                for (attempt in 0..5) {
+                    if (attempt > 0) delay(2000)
+                    check(accountCookie == Innertube.cookie)
+                    found = Innertube.recentPrivateUploads().filter {
+                        includeExisting || it.videoId !in knownIds.orEmpty()
+                    }
+                    if (found.isNotEmpty() || includeExisting) break
+                }
+                if (!includeExisting) {
+                    found.singleOrNull()?.takeIf { it.matchesLocalMetadata(localSong) }?.let(onPick)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                failed = true
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    LaunchedEffect(localSong.videoId) { refresh() }
+
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) {
+            Icon(SfIcons.ArrowBack, contentDescription = stringResource(R.string.back))
+        }
+        Text(stringResource(R.string.upload_song_to_youtube_music), style = MaterialTheme.typography.titleMedium)
+    }
+    SheetTrackHeader(localSong)
+    HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline)
+    when {
+        busy -> {
+            Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.5.dp)
+            }
+        }
+        found.isNotEmpty() -> {
+            SheetHeading(stringResource(R.string.choose_uploaded_song))
+            LazyColumn(contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
+                items(found, key = { it.videoId }) { song ->
+                    SheetTrackHeader(song, modifier = Modifier.clickable { onPick(song) })
+                }
+            }
+        }
+        else -> {
+            if (failed || uploaded) {
+                Text(
+                    stringResource(if (failed) R.string.upload_song_failed else R.string.upload_song_processing),
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 16.dp),
+                )
+            }
+            ActionRow(
+                icon = SfIcons.AddToPlaylist,
+                label = stringResource(if (uploaded || failed) R.string.try_again else R.string.upload_song_to_youtube_music),
+                onClick = { refresh() },
+            )
+            if (uploaded) {
+                ActionRow(
+                    icon = Icons.Rounded.Search,
+                    label = stringResource(R.string.show_recent_uploads),
+                    onClick = { refresh(includeExisting = true) },
+                )
+            }
+        }
+    }
+}
+
+private fun Song.matchesLocalMetadata(localSong: Song): Boolean =
+    title.trim().equals(localSong.title.trim(), ignoreCase = true) &&
+        artist.isNotBlank() && artist.trim().equals(localSong.artist.trim(), ignoreCase = true) &&
+        (durationText == null || localSong.durationText == null || durationText == localSong.durationText)
+
+private suspend fun uploadLocalAudio(context: Context, song: Song) = withContext(Dispatchers.IO) {
+    val uri = Uri.parse(requireNotNull(song.localUri))
+    require(uri.scheme == "content" || uri.scheme == "file")
+    val resolver = context.contentResolver
+    val filename = if (uri.scheme == "file") uri.lastPathSegment else {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    }
+    require(!filename.isNullOrBlank())
+    require(filename.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("mp3", "m4a", "wma", "flac", "ogg"))
+    val temp = File.createTempFile("youtube-music-", ".audio", context.cacheDir)
+    try {
+        checkNotNull(resolver.openInputStream(uri)).use { input ->
+            temp.outputStream().use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var size = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    size += read
+                    require(size < 314_572_800L)
+                    output.write(buffer, 0, read)
+                }
+            }
+        }
+        Innertube.uploadPrivateTrack(temp, filename)
+    } finally {
+        temp.delete()
     }
 }
 

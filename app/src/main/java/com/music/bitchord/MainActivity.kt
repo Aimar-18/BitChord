@@ -779,6 +779,7 @@ private fun BitChordApp(
     // Separate from [songActions] so the menu can close behind it — the picker
     // is the next step, not a second sheet stacked on the first.
     var playlistTarget by remember { mutableStateOf<Song?>(null) }
+    var pendingPlaylistUpload by remember { mutableStateOf<Pair<Song, (Song) -> Unit>?>(null) }
     // The album whose complete track list is being added to selected playlists.
     var albumPlaylistTarget by remember { mutableStateOf<BrowseTarget?>(null) }
     var queuePlaylistSongs by remember { mutableStateOf<List<Song>?>(null) }
@@ -4725,7 +4726,7 @@ private fun BitChordApp(
                 },
                 onAddToPlaylist = {
                     songActions = null
-                    if (song.localUri != null && (song.videoId.startsWith("content://") || song.videoId.startsWith("file://"))) {
+                    if (!signedIn && song.isDevicePlaylistTrack()) {
                         offlinePlaylistTarget = song
                     } else {
                         viewModel.loadPlaylists()
@@ -5216,28 +5217,49 @@ private fun BitChordApp(
                 onDismiss = dismiss,
                 onAdd = { picked ->
                     target?.let { song ->
-                        viewModel.addToPlaylists(picked, song) { added, alreadyThere, failed ->
-                            // One line for the whole batch, saying the outcome
-                            // that matters most: what went in, else that it was
-                            // all there already, else that it didn't work.
-                            showQueueNotice(
-                                when {
-                                    added > 1 -> context.resources.getQuantityString(
-                                        R.plurals.added_to_playlists_notice, added, added,
-                                    )
-                                    added == 1 -> context.getString(R.string.song_added_to_playlist)
-                                    alreadyThere > 0 && failed == 0 ->
-                                        context.getString(R.string.song_already_in_playlist)
-                                    else -> context.getString(R.string.failed)
-                                },
-                            )
+                        val add: (Song) -> Unit = { remoteSong ->
+                            viewModel.addToPlaylists(picked, remoteSong) { added, alreadyThere, failed ->
+                                showQueueNotice(
+                                    when {
+                                        added > 1 -> context.resources.getQuantityString(
+                                            R.plurals.added_to_playlists_notice, added, added,
+                                        )
+                                        added == 1 -> context.getString(R.string.song_added_to_playlist)
+                                        alreadyThere > 0 && failed == 0 ->
+                                            context.getString(R.string.song_already_in_playlist)
+                                        else -> context.getString(R.string.failed)
+                                    },
+                                )
+                            }
                         }
+                        if (song.isDevicePlaylistTrack()) pendingPlaylistUpload = song to add else add(song)
                     }
                 },
                 onCreate = { title, privacy ->
-                    viewModel.createPlaylist(title, privacy, target)
+                    if (target != null && target.isDevicePlaylistTrack()) {
+                        pendingPlaylistUpload = target to { uploaded ->
+                            viewModel.createPlaylist(title, privacy, uploaded)
+                        }
+                    } else {
+                        viewModel.createPlaylist(title, privacy, target)
+                    }
                 },
             )
+        } else {
+            pendingPlaylistUpload?.let { (song, finish) ->
+                PlaylistPickerSheet(
+                    playlists = emptyList(),
+                    loading = false,
+                    song = song,
+                    onDismiss = { pendingPlaylistUpload = null },
+                    onPickUploadedSong = { uploaded ->
+                        pendingPlaylistUpload = null
+                        finish(uploaded)
+                    },
+                    onAdd = {},
+                    onCreate = { _, _ -> },
+                )
+            }
         }
 
         albumPlaylistTarget?.let { target ->
@@ -5300,6 +5322,7 @@ private fun BitChordApp(
                 song = target,
                 startCreating = target == null,
                 offline = true,
+
                 onDismiss = dismiss,
                 onAdd = { picked ->
                     target?.let { song ->
@@ -6696,3 +6719,6 @@ private suspend fun LazyListState.scrollToTopEased() {
 
 /** Safely converts a nullable Float to non-null, defaulting to 0f for null. */
 private fun Float?.orZero(): Float = this ?: 0f
+
+private fun Song.isDevicePlaylistTrack(): Boolean = localUri != null &&
+    (videoId.startsWith("content://") || videoId.startsWith("file://"))

@@ -43,7 +43,12 @@
     <string name="retry">Reintentar</string>
     <string name="shuffle">Aleatorio</string>
     <string name="more">Más</string>
-    <string name="add_to_playlist">Añadir a playlist</string>
+    <string name="upload_song_to_youtube_music">Subir archivo a YouTube Music</string>
+    <string name="choose_uploaded_song">Selecciona la canción que has subido</string>
+    <string name="show_recent_uploads">Ver subidas recientes</string>
+    <string name="upload_song_failed">No se pudo completar la operación. Revisa la conexión y comprueba que el formato de audio sea compatible.</string>
+    <string name="upload_song_processing">El archivo se ha enviado. Si YouTube Music sigue procesándolo, inténtalo de nuevo en un momento.</string>
+    <string name="add_to_playlist">Añadir a la playlist</string>
     <string name="add_to_library">Añadir a la biblioteca</string>
     <string name="remove_from_library">Quitar de la biblioteca</string>
     <string name="download_all">Descargar todo</string>

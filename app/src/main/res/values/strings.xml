@@ -70,6 +70,11 @@
     <string name="auto_empty_offline_subtitle">Download songs on your phone to listen here</string>
     <string name="auto_unavailable_title">Content unavailable</string>
     <string name="auto_unavailable_subtitle">Reopen the folder and try again</string>
+    <string name="upload_song_to_youtube_music">Upload file to YouTube Music</string>
+    <string name="choose_uploaded_song">Select your uploaded song</string>
+    <string name="show_recent_uploads">Show recent uploads</string>
+    <string name="upload_song_failed">Couldn’t complete the operation. Check your connection and make sure the file is a supported audio format.</string>
+    <string name="upload_song_processing">The file was sent. If YouTube Music is still processing it, try again in a moment.</string>
     <string name="add_to_playlist">Add to playlist</string>
     <string name="add_to_library">Add to library</string>
     <string name="remove_from_library">Remove from library</string>
