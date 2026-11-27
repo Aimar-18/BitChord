@@ -82,6 +82,7 @@ import com.music.bitchord.ui.haptics.Haptic
 import com.music.bitchord.ui.haptics.rememberHaptics
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -796,6 +797,7 @@ private fun BitChordApp(
     // three tabs, the search rows, the artist page's carousels, the release
     // page's own overflow — because only one of them can be held at a time.
     var browseActions by remember { mutableStateOf<BrowseTarget?>(null) }
+    var playlistQueueTarget by remember { mutableStateOf<BrowseTarget?>(null) }
     /** The card held to open [browseActions] — see [songMenuOrigin]. */
     var browseMenuOrigin by remember { mutableStateOf<HeldItem?>(null) }
     /** The ⋯ [browseActions] was opened from — see [songMenuAnchor]. */
@@ -5356,6 +5358,20 @@ private fun BitChordApp(
         // overflow. What a track's long-press menu is to one song, this is to
         // the whole release — the queue rows above all.
         // One body for every frame alike — see songMenuBody.
+        fun enqueuePlaylist(target: BrowseTarget, shuffled: Boolean) {
+            val needsFullListing = !target.fromCard &&
+                detail?.browseId == target.browseId && detail?.continuation != null
+            val songTarget = if (needsFullListing) target.copy(songs = emptyList()) else target
+            withBrowseSongs(songTarget) { songs ->
+                val ordered = when {
+                    shuffled -> songs.shuffled()
+                    needsFullListing -> songs.sortedForDetail(songSort)
+                    else -> songs
+                }
+                addSongsToQueue(ordered)
+            }
+        }
+
         val browseMenuBody: @Composable (BrowseTarget) -> Unit = { target ->
             // Every row here closes the menu first: the tracks may still have to
             // be fetched, and leaving the sheet up over a request nothing on it
@@ -5424,7 +5440,14 @@ private fun BitChordApp(
                 },
                 startRenaming = browseRenameInSheet,
                 onPlayNext = act(playSongsNext),
-                onAddToQueue = act(addSongsToQueue),
+                onAddToQueue = {
+                    browseActions = null
+                    when {
+                        target.type != BrowseType.PLAYLIST -> withBrowseSongs(target, addSongsToQueue)
+                        (controller?.mediaItemCount ?: 0) > 0 -> playlistQueueTarget = target
+                        else -> enqueuePlaylist(target, shuffled = false)
+                    }
+                },
                 onPlay = act { songs ->
                     QueueShuffle.disableForNextQueue()
                     play(songs, 0)
@@ -5648,6 +5671,26 @@ private fun BitChordApp(
                     browseRenameInSheet = false
                 }
             }
+        }
+
+        playlistQueueTarget?.let { target ->
+            AlertDialog(
+                onDismissRequest = { playlistQueueTarget = null },
+                title = { Text(stringResource(R.string.add_to_queue)) },
+                text = { Text(target.title) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        playlistQueueTarget = null
+                        enqueuePlaylist(target, shuffled = true)
+                    }) { Text(stringResource(R.string.queue_playlist_shuffled)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        playlistQueueTarget = null
+                        enqueuePlaylist(target, shuffled = false)
+                    }) { Text(stringResource(R.string.queue_playlist_in_order)) }
+                },
+            )
         }
 
         // ---- Welcome (once; under the sign-in WebView it can open) ----
