@@ -405,7 +405,6 @@ class PlaybackService : MediaLibraryService() {
      */
     private var cachedLiked: Pair<Long, List<Song>>? = null
     private var cachedLikedCookie: String? = null
-    private var cachedLikedPage: YtMusicRepository.SongPage? = null
 
     private class ExpiredBrowseContextException :
         IllegalArgumentException("Browse context expired; reopen the folder")
@@ -424,6 +423,7 @@ class PlaybackService : MediaLibraryService() {
         source: QueueSource,
         continuation: String? = null,
         cookie: String? = com.music.bitchord.data.innertube.Innertube.cookie,
+        compactMetadata: Boolean = false,
     ): List<MediaItem> {
         if (songs.isEmpty()) return emptyList()
         val context = AutoBrowseContext(YtMusicRepository.SongPage(songs, continuation), cookie, source)
@@ -442,11 +442,44 @@ class PlaybackService : MediaLibraryService() {
             }
         }
         return songs.mapIndexed { index, song ->
-            song.toMediaItem().buildUpon()
-                .setMediaId("auto-browse:$token:$index")
-                .build()
+            val item = if (compactMetadata) {
+                // Keep long lists within the legacy MediaBrowser transfer limit.
+                // Playback resolves this ID against the full song in the context.
+                MediaItem.Builder().setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle(song.title)
+                        .setArtist(song.artist)
+                        .setIsBrowsable(false)
+                        .setIsPlayable(true)
+                        .build(),
+                )
+            } else {
+                song.toMediaItem().buildUpon()
+            }
+            item.setMediaId("auto-browse:$token:$index").build()
         }
     }
+
+    private suspend fun completeAutoSongPage(
+        firstPage: YtMusicRepository.SongPage,
+        cookie: String?,
+    ): YtMusicRepository.SongPage? {
+        val songs = firstPage.songs.toMutableList()
+        val seen = HashSet<String>()
+        var continuation = firstPage.continuation
+        while (true) {
+            if (cookie != com.music.bitchord.data.innertube.Innertube.cookie) return null
+            val token = continuation ?: break
+            if (!seen.add(token)) return null
+            val page = withTimeoutOrNull(4000L) {
+                YtMusicRepository.moreSongs(token).getOrNull()
+            } ?: return null
+            songs.addAll(page.songs)
+            continuation = page.continuation
+        }
+        return firstPage.copy(songs = songs, continuation = null)
+    }
+
     private val likedMutex = Mutex()
     private val LIKED_CACHE_TTL_MS = 60_000L
 
@@ -454,12 +487,10 @@ class PlaybackService : MediaLibraryService() {
         val cookie = com.music.bitchord.data.innertube.Innertube.cookie
         if (cookie == null) {
             cachedLiked = null
-            cachedLikedPage = null
             cachedLikedCookie = null
             return emptyList()
         }
         if (cachedLikedCookie != null && cachedLikedCookie != cookie) {
-            cachedLikedPage = null
             cachedLiked = null
         }
         cachedLiked?.let { (at, songs) ->
@@ -484,9 +515,8 @@ class PlaybackService : MediaLibraryService() {
         } catch (_: Exception) {
             null
         }
-        val songs = page?.songs.orEmpty()
+        val songs = page?.let { completeAutoSongPage(it, cookie) }?.songs.orEmpty()
         if (songs.isNotEmpty()) {
-            cachedLikedPage = page
             cachedLiked = SystemClock.elapsedRealtime() to songs
             cachedLikedCookie = cookie
             songs.forEach { songCache[it.videoId] = it }
@@ -9645,6 +9675,7 @@ class PlaybackService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future(Dispatchers.IO) {
             val isGridFolder = parentId == MEDIA_ROOT_ID || parentId == MEDIA_PLAYLISTS_ID
+            val isBrowseTrackFolder = parentId.startsWith("playlist:") || parentId.startsWith("browse:")
             val items: List<MediaItem> = when (parentId) {
                 MEDIA_ROOT_ID -> listOf(
                     createFolderItem(MEDIA_QUICK_PICKS_ID, getString(R.string.auto_quick_picks), folderType = MediaMetadata.FOLDER_TYPE_PLAYLISTS),
@@ -9722,13 +9753,12 @@ class PlaybackService : MediaLibraryService() {
                         songs.forEach { songCache[it.videoId] = it }
                         if (songs.isNotEmpty()) {
                             likedMutex.withLock {
-                                val page = cachedLikedPage
                                 if (cachedLikedCookie != com.music.bitchord.data.innertube.Innertube.cookie) emptyList()
                                 else autoBrowseItems(
-                                    page?.songs ?: songs,
+                                    cachedLiked?.second.orEmpty(),
                                     QueueSource(getString(R.string.auto_liked), PlaybackSourceType.BROWSE, YtMusicRepository.LIKED_MUSIC),
-                                    page?.continuation,
-                                    cachedLikedCookie,
+                                    cookie = cachedLikedCookie,
+                                    compactMetadata = true,
                                 )
                             }
                         } else {
@@ -9790,22 +9820,29 @@ class PlaybackService : MediaLibraryService() {
                 }
                 else -> {
                     when {
-                        parentId.startsWith("playlist:") || parentId.startsWith("browse:") -> {
+                        isBrowseTrackFolder -> {
                             val id = parentId.substringAfter(':')
                             val browseId = if (parentId.startsWith("playlist:")) "VL$id" else id
                             val cookie = com.music.bitchord.data.innertube.Innertube.cookie
-                            val songPage = withTimeoutOrNull(2500L) {
+                            val firstPage = withTimeoutOrNull(4000L) {
                                 YtMusicRepository.browseSongs(browseId).getOrNull()
                                     ?: if (browseId != id) YtMusicRepository.browseSongs(id).getOrNull() else null
                             }
-                            if (songPage == null) emptyList() else {
+                            val songPage = firstPage?.let { completeAutoSongPage(it, cookie) }
+                            if (songPage == null) listOf(
+                                createInfoItem(
+                                    "msg:unavailable",
+                                    getString(R.string.auto_unavailable_title),
+                                    getString(R.string.auto_unavailable_subtitle),
+                                ),
+                            ) else {
                                 songPage.songs.forEach { songCache[it.videoId] = it }
                                 val source = QueueSource(
                                     songPage.header?.title ?: getString(R.string.playlists),
                                     PlaybackSourceType.BROWSE,
                                     browseId,
                                 )
-                                autoBrowseItems(songPage.songs, source, songPage.continuation, cookie)
+                                autoBrowseItems(songPage.songs, source, cookie = cookie, compactMetadata = true)
                             }
                         }
                         else -> {
@@ -9825,7 +9862,9 @@ class PlaybackService : MediaLibraryService() {
                     CONTENT_STYLE_LIST_ITEM_HINT_VALUE,
                 ),
             ).build()
-            LibraryResult.ofItemList(ImmutableList.copyOf(paginate(items, page, pageSize)), returnParams)
+            // Android Auto requests a single unpaged list for a folder.
+            val pageLimit = if (isBrowseTrackFolder || parentId == MEDIA_LIKED_ID) Int.MAX_VALUE else MAX_AUTO_PAGE_SIZE
+            LibraryResult.ofItemList(ImmutableList.copyOf(paginate(items, page, pageSize, pageLimit)), returnParams)
         }
 
         override fun onGetItem(
@@ -9842,6 +9881,7 @@ class PlaybackService : MediaLibraryService() {
                     )
                 }
             }
+
             val item = when (mediaId) {
                 MEDIA_ROOT_ID -> MediaItem.Builder()
                     .setMediaId(MEDIA_ROOT_ID)
@@ -10234,9 +10274,14 @@ class PlaybackService : MediaLibraryService() {
             putBoolean(EXTRA_CONTENT_STYLE_SUPPORTED_AX, true)
         }
 
-    private fun <T> paginate(items: List<T>, page: Int, pageSize: Int): List<T> {
+    private fun <T> paginate(
+        items: List<T>,
+        page: Int,
+        pageSize: Int,
+        maxPageSize: Int = MAX_AUTO_PAGE_SIZE,
+    ): List<T> {
         if (page < 0 || pageSize <= 0 || items.isEmpty()) return emptyList()
-        val safePageSize = pageSize.coerceAtMost(MAX_AUTO_PAGE_SIZE)
+        val safePageSize = pageSize.coerceAtMost(maxPageSize)
         val fromLong = page.toLong() * safePageSize.toLong()
         if (fromLong >= items.size.toLong()) return emptyList()
         val from = fromLong.toInt()
