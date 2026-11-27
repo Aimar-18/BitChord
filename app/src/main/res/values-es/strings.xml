@@ -1051,6 +1051,7 @@
 
     <string name="auto_empty_playlists_subtitle">Check your connection and try again</string>
 
+    <string name="auto_more_songs">Más canciones</string>
     <string name="auto_empty_liked_title">No liked songs</string>
 
     <string name="auto_empty_liked_subtitle">Tap the heart on a song to save it here</string>

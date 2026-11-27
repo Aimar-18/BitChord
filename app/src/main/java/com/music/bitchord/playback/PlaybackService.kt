@@ -424,8 +424,9 @@ class PlaybackService : MediaLibraryService() {
         source: QueueSource,
         continuation: String? = null,
         cookie: String? = com.music.bitchord.data.innertube.Innertube.cookie,
+        showMoreSongs: Boolean = false,
     ): List<MediaItem> {
-        if (songs.isEmpty()) return emptyList()
+        if (songs.isEmpty() && (!showMoreSongs || continuation == null)) return emptyList()
         val context = AutoBrowseContext(YtMusicRepository.SongPage(songs, continuation), cookie, source)
         val token = synchronized(autoBrowseContexts) {
             val existing = autoBrowseContexts.entries.firstOrNull { it.value == context }
@@ -441,12 +442,68 @@ class PlaybackService : MediaLibraryService() {
                 }
             }
         }
-        return songs.mapIndexed { index, song ->
-            song.toMediaItem().buildUpon()
-                .setMediaId("auto-browse:$token:$index")
-                .build()
+        return autoBrowseTrackItems(context, token, 0, showMoreSongs)
+    }
+
+    private fun autoBrowseTrackItems(
+        context: AutoBrowseContext,
+        token: String,
+        start: Int,
+        showMoreSongs: Boolean,
+    ): List<MediaItem> {
+        val songs = context.page.songs
+        // Android Auto does not request further MediaBrowser pages. Reserve a row
+        // for a browsable folder whenever there are more tracks to expose.
+        val hasMore = showMoreSongs &&
+            (songs.size - start > MAX_AUTO_PAGE_SIZE || context.page.continuation != null)
+        val end = if (hasMore) start + minOf(songs.size - start, MAX_AUTO_PAGE_SIZE - 1) else songs.size
+        return buildList {
+            for (index in start until end) {
+                add(
+                    songs[index].toMediaItem().buildUpon()
+                        .setMediaId("auto-browse:$token:$index")
+                        .build(),
+                )
+            }
+            if (hasMore) add(autoMoreSongsFolder("auto-more-songs:$token:$end"))
         }
     }
+
+    private fun autoMoreSongsFolder(mediaId: String) =
+        createFolderItem(mediaId, getString(R.string.auto_more_songs))
+
+    private suspend fun loadMoreAutoSongs(mediaId: String): List<MediaItem> {
+        val parts = mediaId.split(':')
+        if (parts.size != 3) return emptyList()
+        val token = parts[1]
+        val start = parts[2].toIntOrNull() ?: return emptyList()
+        val context = synchronized(autoBrowseContexts) { autoBrowseContexts[token] } ?: return emptyList()
+        if (context.cookie != com.music.bitchord.data.innertube.Innertube.cookie) return emptyList()
+        if (start !in 0..context.page.songs.size) return emptyList()
+        if (start < context.page.songs.size) return autoBrowseTrackItems(context, token, start, true)
+
+        val continuation = context.page.continuation ?: return emptyList()
+        val page = withTimeoutOrNull(2500L) {
+            YtMusicRepository.moreSongs(continuation).getOrNull()
+        }
+        if (context.cookie != com.music.bitchord.data.innertube.Innertube.cookie) return emptyList()
+        if (page == null) return listOf(
+            createInfoItem(
+                "msg:unavailable",
+                getString(R.string.auto_unavailable_title),
+                getString(R.string.auto_unavailable_subtitle),
+            ),
+        )
+        page.songs.forEach { songCache[it.videoId] = it }
+        return autoBrowseItems(
+            page.songs,
+            context.source,
+            page.continuation?.takeUnless { it == continuation },
+            context.cookie,
+            showMoreSongs = true,
+        )
+    }
+
     private val likedMutex = Mutex()
     private val LIKED_CACHE_TTL_MS = 60_000L
 
@@ -9729,6 +9786,7 @@ class PlaybackService : MediaLibraryService() {
                                     QueueSource(getString(R.string.auto_liked), PlaybackSourceType.BROWSE, YtMusicRepository.LIKED_MUSIC),
                                     page?.continuation,
                                     cachedLikedCookie,
+                                    showMoreSongs = true,
                                 )
                             }
                         } else {
@@ -9790,6 +9848,7 @@ class PlaybackService : MediaLibraryService() {
                 }
                 else -> {
                     when {
+                        parentId.startsWith("auto-more-songs:") -> loadMoreAutoSongs(parentId)
                         parentId.startsWith("playlist:") || parentId.startsWith("browse:") -> {
                             val id = parentId.substringAfter(':')
                             val browseId = if (parentId.startsWith("playlist:")) "VL$id" else id
@@ -9805,7 +9864,7 @@ class PlaybackService : MediaLibraryService() {
                                     PlaybackSourceType.BROWSE,
                                     browseId,
                                 )
-                                autoBrowseItems(songPage.songs, source, songPage.continuation, cookie)
+                                autoBrowseItems(songPage.songs, source, songPage.continuation, cookie, showMoreSongs = true)
                             }
                         }
                         else -> {
@@ -9841,6 +9900,9 @@ class PlaybackService : MediaLibraryService() {
                         context.page.songs[index].toMediaItem().buildUpon().setMediaId(mediaId).build(), null,
                     )
                 }
+            }
+            if (mediaId.startsWith("auto-more-songs:")) {
+                return@future LibraryResult.ofItem(autoMoreSongsFolder(mediaId), null)
             }
             val item = when (mediaId) {
                 MEDIA_ROOT_ID -> MediaItem.Builder()
