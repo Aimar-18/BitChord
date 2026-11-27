@@ -700,6 +700,35 @@ fun ConfirmationAlert(
     }
 }
 
+@Composable
+internal fun PlaylistQueueOrderAlert(
+    hazeState: HazeState,
+    onDismiss: () -> Unit,
+    onChooseOrder: (shuffled: Boolean) -> Unit,
+) {
+    AlertScaffold(hazeState = hazeState, onDismiss = onDismiss) {
+        Text(
+            text = stringResource(R.string.add_to_queue),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
+            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.W600),
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        AlertRule()
+        AlertAction(
+            label = stringResource(R.string.queue_playlist_in_order),
+            emphasised = false,
+            onClick = { onChooseOrder(false) },
+        )
+        AlertRule()
+        AlertAction(
+            label = stringResource(R.string.queue_playlist_shuffled),
+            emphasised = false,
+            onClick = { onChooseOrder(true) },
+        )
+    }
+}
+
 /**
  * [ConfirmationAlert] with nothing to confirm: a title, an explanation and
  * one OK. For telling the listener why something didn't happen, in the same

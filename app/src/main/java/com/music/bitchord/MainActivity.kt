@@ -249,6 +249,7 @@ import com.music.bitchord.download.Downloads
 import com.music.bitchord.ui.components.BrowseActionsMenu
 import com.music.bitchord.ui.components.BrowseTarget
 import com.music.bitchord.ui.components.ConfirmationAlert
+import com.music.bitchord.ui.components.PlaylistQueueOrderAlert
 import com.music.bitchord.ui.components.InfoAlert
 import com.music.bitchord.ui.components.DownloadManagerPage
 import com.music.bitchord.ui.components.PlaylistPickerSheet
@@ -797,6 +798,7 @@ private fun BitChordApp(
     // three tabs, the search rows, the artist page's carousels, the release
     // page's own overflow — because only one of them can be held at a time.
     var browseActions by remember { mutableStateOf<BrowseTarget?>(null) }
+    var playlistQueueOrderTarget by remember { mutableStateOf<BrowseTarget?>(null) }
     /** The card held to open [browseActions] — see [songMenuOrigin]. */
     var browseMenuOrigin by remember { mutableStateOf<HeldItem?>(null) }
     /** The ⋯ [browseActions] was opened from — see [songMenuAnchor]. */
@@ -5461,20 +5463,14 @@ private fun BitChordApp(
                 },
                 startRenaming = browseRenameInSheet,
                 onPlayNext = act(playSongsNext),
-                onAddToQueue = if (target.type == BrowseType.PLAYLIST) {
-                    {
-                        browseActions = null
-                        enqueuePlaylist(target, shuffled = false)
+                onAddToQueue = {
+                    browseActions = null
+                    when {
+                        target.type != BrowseType.PLAYLIST -> withBrowseSongs(target, addSongsToQueue)
+                        (controller?.mediaItemCount ?: 0) > 0 -> playlistQueueOrderTarget = target
+                        else -> enqueuePlaylist(target, shuffled = false)
                     }
-                } else {
-                    act(addSongsToQueue)
                 },
-                onAddShuffledToQueue = if (target.type == BrowseType.PLAYLIST && (controller?.mediaItemCount ?: 0) > 0) {
-                    {
-                        browseActions = null
-                        enqueuePlaylist(target, shuffled = true)
-                    }
-                } else null,
                 onPlay = act { songs ->
                     QueueShuffle.disableForNextQueue()
                     play(songs, 0)
@@ -5698,6 +5694,19 @@ private fun BitChordApp(
                     browseRenameInSheet = false
                 }
             }
+        }
+
+        playlistQueueOrderTarget?.let { target ->
+            val dismiss = { playlistQueueOrderTarget = null }
+            BackHandler(onBack = dismiss)
+            PlaylistQueueOrderAlert(
+                hazeState = hazeState,
+                onDismiss = dismiss,
+                onChooseOrder = { shuffled ->
+                    dismiss()
+                    enqueuePlaylist(target, shuffled)
+                },
+            )
         }
 
         // ---- Welcome (once; under the sign-in WebView it can open) ----
