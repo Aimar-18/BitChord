@@ -84,6 +84,7 @@ import com.music.bitchord.ui.icons.BitChordIcons
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import io.ktor.client.plugins.ResponseException
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -296,23 +297,26 @@ private fun UploadLocalSongPanel(localSong: Song, onBack: () -> Unit, onPick: (S
     var found by remember { mutableStateOf<List<Song>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     var uploaded by remember { mutableStateOf(false) }
-    var failed by remember { mutableStateOf(false) }
+    var failure by remember { mutableStateOf<String?>(null) }
 
     fun refresh(includeExisting: Boolean = false) {
         if (busy) return
         busy = true
-        failed = false
+        failure = null
         scope.launch {
+            var checkingLibrary = true
             try {
-                check(accountCookie != null && accountCookie == Innertube.cookie)
+                if (accountCookie == null || accountCookie != Innertube.cookie) throw Innertube.NotSignedInException()
                 if (!uploaded) {
                     knownIds = Innertube.recentPrivateUploads().mapTo(HashSet()) { it.videoId }
+                    checkingLibrary = false
                     uploadLocalAudio(context, localSong)
                     uploaded = true
+                    checkingLibrary = true
                 }
                 for (attempt in 0..5) {
                     if (attempt > 0) delay(2000)
-                    check(accountCookie == Innertube.cookie)
+                    if (accountCookie != Innertube.cookie) throw Innertube.NotSignedInException()
                     found = Innertube.recentPrivateUploads().filter {
                         includeExisting || it.videoId !in knownIds.orEmpty()
                     }
@@ -323,8 +327,18 @@ private fun UploadLocalSongPanel(localSong: Song, onBack: () -> Unit, onPick: (S
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                failed = true
+            } catch (error: Exception) {
+                failure = when (error) {
+                    is LocalAudioUploadException -> context.getString(error.messageRes)
+                    is Innertube.NotSignedInException -> context.getString(R.string.upload_song_sign_in)
+                    is ResponseException -> context.getString(
+                        if (checkingLibrary) R.string.upload_song_library_http else R.string.upload_song_transfer_http,
+                        error.response.status.value,
+                    )
+                    else -> context.getString(
+                        if (checkingLibrary) R.string.upload_song_library_failed else R.string.upload_song_failed,
+                    )
+                }
             } finally {
                 busy = false
             }
@@ -365,15 +379,16 @@ private fun UploadLocalSongPanel(localSong: Song, onBack: () -> Unit, onPick: (S
             }
         }
         else -> {
-            if (failed || uploaded) {
+            val message = failure ?: if (uploaded) stringResource(R.string.upload_song_processing) else null
+            if (message != null) {
                 Text(
-                    stringResource(if (failed) R.string.upload_song_failed else R.string.upload_song_processing),
+                    message,
                     modifier = Modifier.padding(horizontal = 22.dp, vertical = 16.dp),
                 )
             }
             ActionRow(
                 icon = SfIcons.AddToPlaylist,
-                label = stringResource(if (uploaded || failed) R.string.try_again else R.string.upload_song_to_youtube_music),
+                label = stringResource(if (uploaded || failure != null) R.string.try_again else R.string.upload_song_to_youtube_music),
                 onClick = { refresh() },
             )
             if (uploaded) {
@@ -392,20 +407,34 @@ private fun Song.matchesLocalMetadata(localSong: Song): Boolean =
         artist.isNotBlank() && artist.trim().equals(localSong.artist.trim(), ignoreCase = true) &&
         (durationText == null || localSong.durationText == null || durationText == localSong.durationText)
 
+private class LocalAudioUploadException(val messageRes: Int) : Exception()
+
 private suspend fun uploadLocalAudio(context: Context, song: Song) = withContext(Dispatchers.IO) {
     val uri = Uri.parse(requireNotNull(song.localUri))
-    require(uri.scheme == "content" || uri.scheme == "file")
+    if (uri.scheme != "content" && uri.scheme != "file") {
+        throw LocalAudioUploadException(R.string.upload_song_file_unreadable)
+    }
     val resolver = context.contentResolver
     val filename = if (uri.scheme == "file") uri.lastPathSegment else {
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }
     }
-    require(!filename.isNullOrBlank())
-    require(filename.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("mp3", "m4a", "wma", "flac", "ogg"))
+    if (filename.isNullOrBlank()) throw LocalAudioUploadException(R.string.upload_song_file_unreadable)
+    val extension = filename.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    if (extension !in setOf("mp3", "m4a", "wma", "flac", "ogg")) {
+        throw LocalAudioUploadException(R.string.upload_song_format_unsupported)
+    }
     val temp = File.createTempFile("youtube-music-", ".audio", context.cacheDir)
     try {
-        checkNotNull(resolver.openInputStream(uri)).use { input ->
+        val original = try {
+            resolver.openInputStream(uri)
+        } catch (_: java.io.IOException) {
+            null
+        } catch (_: SecurityException) {
+            null
+        } ?: throw LocalAudioUploadException(R.string.upload_song_file_unreadable)
+        original.use { input ->
             temp.outputStream().use { output ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 var size = 0L
@@ -413,12 +442,13 @@ private suspend fun uploadLocalAudio(context: Context, song: Song) = withContext
                     val read = input.read(buffer)
                     if (read < 0) break
                     size += read
-                    require(size < 314_572_800L)
+                    if (size >= 314_572_800L) throw LocalAudioUploadException(R.string.upload_song_size_limit)
                     output.write(buffer, 0, read)
                 }
             }
         }
-        Innertube.uploadPrivateTrack(temp, filename)
+        if (temp.length() == 0L) throw LocalAudioUploadException(R.string.upload_song_file_unreadable)
+        Innertube.uploadPrivateTrack(temp, filename.substringBeforeLast('.') + "." + extension)
     } finally {
         temp.delete()
     }

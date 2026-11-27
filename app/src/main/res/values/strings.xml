@@ -73,7 +73,14 @@
     <string name="upload_song_to_youtube_music">Upload file to YouTube Music</string>
     <string name="choose_uploaded_song">Select your uploaded song</string>
     <string name="show_recent_uploads">Show recent uploads</string>
-    <string name="upload_song_failed">Couldn’t complete the operation. Check your connection and make sure the file is a supported audio format.</string>
+    <string name="upload_song_failed">The audio could not be sent to YouTube Music. Try again.</string>
+    <string name="upload_song_library_failed">Could not check your YouTube Music uploads. Try again.</string>
+    <string name="upload_song_library_http">YouTube Music refused to open your uploads (HTTP %1$d).</string>
+    <string name="upload_song_transfer_http">YouTube Music refused the upload (HTTP %1$d).</string>
+    <string name="upload_song_sign_in">Sign in to YouTube Music again to upload this song.</string>
+    <string name="upload_song_file_unreadable">BitChord could not open or read the original audio file.</string>
+    <string name="upload_song_format_unsupported">The file needs a FLAC, M4A, MP3, OGG, or WMA extension to upload to YouTube Music.</string>
+    <string name="upload_song_size_limit">The audio file exceeds the upload size limit.</string>
     <string name="upload_song_sending">Uploading song…</string>
     <string name="upload_song_waiting">Waiting for YouTube Music…</string>
     <string name="upload_song_processing">The file was sent. If YouTube Music is still processing it, try again in a moment.</string>

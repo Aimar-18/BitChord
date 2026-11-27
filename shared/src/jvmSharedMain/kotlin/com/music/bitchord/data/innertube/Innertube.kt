@@ -970,6 +970,8 @@ object Innertube {
         val size = file.length()
         require(size in 1L until 314_572_800L)
         val authHeaders: HttpRequestBuilder.() -> Unit = {
+            header("User-Agent", WEB_USER_AGENT)
+            header("X-Goog-Upload-Protocol", "resumable")
             header("Cookie", credentials)
             header("Authorization", authorization)
             header("Origin", MUSIC_ORIGIN)
@@ -981,7 +983,6 @@ object Innertube {
         val start = uploadClient.post("https://upload.youtube.com/upload/usermusic/http") {
             parameter("authuser", authUser)
             authHeaders()
-            header("X-Goog-Upload-Protocol", "resumable")
             header("X-Goog-Upload-Command", "start")
             header("X-Goog-Upload-Header-Content-Length", size)
             contentType(ContentType.Application.FormUrlEncoded.withCharset(Charsets.UTF_8))
