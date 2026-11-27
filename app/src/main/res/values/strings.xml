@@ -74,6 +74,8 @@
     <string name="choose_uploaded_song">Select your uploaded song</string>
     <string name="show_recent_uploads">Show recent uploads</string>
     <string name="upload_song_failed">Couldn’t complete the operation. Check your connection and make sure the file is a supported audio format.</string>
+    <string name="upload_song_sending">Uploading song…</string>
+    <string name="upload_song_waiting">Waiting for YouTube Music…</string>
     <string name="upload_song_processing">The file was sent. If YouTube Music is still processing it, try again in a moment.</string>
     <string name="add_to_playlist">Add to playlist</string>
     <string name="add_to_library">Add to library</string>

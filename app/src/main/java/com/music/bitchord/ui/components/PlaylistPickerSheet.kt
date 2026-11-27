@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -342,8 +343,17 @@ private fun UploadLocalSongPanel(localSong: Song, onBack: () -> Unit, onPick: (S
     HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline)
     when {
         busy -> {
-            Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+            ) {
                 CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.5.dp)
+                Text(
+                    text = stringResource(if (uploaded) R.string.upload_song_waiting else R.string.upload_song_sending),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         found.isNotEmpty() -> {
